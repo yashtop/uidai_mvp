@@ -1,0 +1,220 @@
+# -------------------------------
+# 🐍 Python & FastAPI Environment
+# -------------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pdb
+*$py.class
+*.egg-info/
+.eggs/
+dist/
+build/
+*.so
+*.dll
+*.a
+*.o
+*.obj
+
+# Virtual environment
+.venv/
+venv/
+env/
+ENV/
+*.env
+.env.local
+.env.production
+.env.development
+.env.*
+
+# Jupyter & IPython
+.ipynb_checkpoints/
+*.ipynb
+
+# IDEs & Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*.swn
+*.bak
+*.orig
+*.log
+.DS_Store
+Thumbs.db
+
+# -------------------------------
+# 🧪 Tests, Reports, and Artifacts
+# -------------------------------
+# Pytest cache & reports
+.pytest_cache/
+.cache/
+htmlcov/
+.coverage
+coverage.xml
+nosetests.xml
+junit*.xml
+
+# Allure reports
+allure-results/
+allure-report/
+
+# UIDAI run directories
+/tmp/
+tmp/
+uidai-artifacts/
+*.trace.zip
+*.png
+*.json.report
+*.meta.json
+
+# UIDAI MCP runtime (FastAPI MCP)
+uidai_runs/
+**/uidai_runs/
+**/runs/
+**/tests/artifacts/
+**/tests/results/
+**/tests/tmp/
+**/tests/output/
+
+# Auto-generated reports (Playwright)
+report.json
+report.html
+report.zip
+trace.zip
+trace.json
+test-results/
+test-output/
+screenshots/
+screens/
+snapshots/
+
+# Local test data
+*.db
+*.sqlite
+*.sqlite3
+*.pkl
+*.csv
+*.tsv
+*.xls
+*.xlsx
+
+# -------------------------------
+# 🧠 AI Models (Ollama / LLM)
+# -------------------------------
+# Ollama models cache
+~/.ollama/
+ollama/
+models/
+*.bin
+*.gguf
+*.pt
+*.safetensors
+*.ckpt
+*.h5
+*.pth
+
+# -------------------------------
+# 🐳 Docker & Deployment
+# -------------------------------
+docker-compose.override.yml
+*.pid
+*.sock
+*.log
+*.out
+*.err
+
+# -------------------------------
+# ☁️ MinIO / S3 Artifacts
+# -------------------------------
+*.minio/
+minio-data/
+minio-config/
+**/artifacts/
+**/uidai-artifacts/
+**/migrations/
+*.bak
+*.tar
+*.zip
+
+# -------------------------------
+# 🧰 Node/Frontend (if UI added)
+# -------------------------------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-store/
+.next/
+out/
+*.tsbuildinfo
+
+# -------------------------------
+# 🧾 Database & Postgres Dumps
+# -------------------------------
+*.sql
+*.dump
+*.backup
+postgres-data/
+pgdata/
+pg_wal/
+pg_log/
+
+# -------------------------------
+# 🪶 Logs & Temp Files
+# -------------------------------
+*.log
+*.tmp
+*.temp
+*.pid
+*.lock
+*.bak
+*.swp
+*.swo
+logs/
+log/
+debug.log
+
+# -------------------------------
+# 🔒 Secrets / Credentials
+# -------------------------------
+secrets.json
+keys.json
+*.pem
+*.key
+*.crt
+*.csr
+*.enc
+*.token
+*.creds
+*.aws
+*.minio
+credentials/
+config.yaml
+config.yml
+config.json
+
+# -------------------------------
+# 📸 Visual Outputs
+# -------------------------------
+screenshots/
+snapshots/
+**/*.png
+**/*.jpg
+**/*.jpeg
+**/*.gif
+**/*.svg
+**/*.webp
+
+# -------------------------------
+# 🧩 Miscellaneous
+# -------------------------------
+*.bak
+*.tmp
+*.old
+*.orig
+*.swp
+*.swo
+*.~lock*
+~$*
