@@ -33,65 +33,103 @@ def run_playwright_tests(run_id: str, gen_dir: str, headed: bool, playwright_opt
         shutil.rmtree(dest_tests)
     shutil.copytree(tests_dir, dest_tests)
 
-    # ensure artifacts folder exists (tests should write there)
-    artifacts_dir = dest_tests / "artifacts"
+    # CRITICAL: Create artifacts folder in run_dir (not inside tests)
+    artifacts_dir = run_dir / "artifacts"
     artifacts_dir.mkdir(parents=True, exist_ok=True)
+    
+    log.info(f"Artifacts directory: {artifacts_dir}")
 
     env = os.environ.copy()
     env["UIDAI_HEADED"] = "1" if headed else "0"
+    # Set environment variable so tests know where to save artifacts
+    env["ARTIFACTS_DIR"] = str(artifacts_dir)
 
     json_report = run_dir / "report.json"
+    
     # run pytest with json-report plugin
     cmd = [
-    sys.executable, "-m", "pytest",
-    str(dest_tests),
-    "-q",
-    "--json-report",
-    f"--json-report-file={str(run_dir / 'report.json')}",
-    f"--alluredir={str(run_dir / 'allure-results')}",
+        sys.executable, "-m", "pytest",
+        str(dest_tests),
+        "-q",
+        "--json-report",
+        f"--json-report-file={json_report}",
+        f"--alluredir={run_dir / 'allure-results'}",
     ]
 
     log.info("Running tests: %s", " ".join(cmd))
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, text=True)
+    log.info(f"Working directory: {run_dir}")
+    
+    proc = subprocess.Popen(
+        cmd, 
+        stdout=subprocess.PIPE, 
+        stderr=subprocess.STDOUT, 
+        env=env, 
+        text=True,
+        cwd=str(run_dir)  # Run from run_dir so relative paths work
+    )
+    
     stdout = []
     try:
         out, _ = proc.communicate(timeout=timeout_seconds)
         if out:
             stdout = out.splitlines()
+            # Print last 20 lines to logs
+            for line in stdout[-20:]:
+                log.info(f"TEST: {line}")
     except subprocess.TimeoutExpired:
         proc.kill()
         out, _ = proc.communicate()
         stdout = out.splitlines() if out else []
+    
     exit_code = proc.returncode if proc.returncode is not None else 1
 
+    # Upload artifacts
     uploaded = []
-    if artifacts_dir.exists():
+    if artifacts_dir.exists() and any(artifacts_dir.iterdir()):
         try:
-            uploaded = upload_dir(str(artifacts_dir), f"{run_id}/artifacts")
+            log.info(f"Uploading artifacts from: {artifacts_dir}")
+            uploaded = upload_dir(run_id, str(artifacts_dir))
+            log.info(f"Uploaded {len(uploaded)} artifacts")
         except Exception as e:
             log.exception("MinIO upload artifacts failed: %s", e)
+    else:
+        log.warning(f"No artifacts found at: {artifacts_dir}")
 
+    # Upload report
     if json_report.exists():
         try:
-            uploaded.append(upload_file(str(json_report), f"{run_id}/report.json"))
+            log.info(f"Uploading report from: {json_report}")
+            report_key = upload_file(run_id, str(json_report))
+            if report_key:
+                uploaded.append(report_key)
         except Exception as e:
             log.exception("MinIO upload report failed: %s", e)
 
-    # attempt to parse JSON report for summary
+    # Parse JSON report
     report_json = None
+    summary = None
     if json_report.exists():
         try:
             report_json = json.loads(json_report.read_text(encoding="utf-8"))
+            # Extract summary
+            if report_json and "summary" in report_json:
+                summary = {
+                    "total": int(report_json["summary"].get("total", 0)),
+                    "passed": int(report_json["summary"].get("passed", 0)),
+                    "failed": int(report_json["summary"].get("failed", 0)),
+                    "skipped": int(report_json["summary"].get("skipped", 0)),
+                    "duration": float(report_json["summary"].get("duration", 0)),
+                }
         except Exception as e:
             log.exception("Failed to parse json report: %s", e)
 
     result = {
-        "runId": run_id,
+        "ok": exit_code == 0,
         "exitCode": exit_code,
+        "summary": summary,
+        "tests": report_json.get("tests", []) if report_json else [],
         "stdout": "\n".join(stdout[-500:]),
         "artifacts": uploaded,
-        "report": report_json,
         "reportPath": f"{run_id}/report.json" if json_report.exists() else None,
-        "timestamp": datetime.utcnow().isoformat() + "Z",
     }
     return result

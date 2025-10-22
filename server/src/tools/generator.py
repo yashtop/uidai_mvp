@@ -470,7 +470,6 @@ async def test_{safe_name}():
 def generate_scenario_stub(url: str, scenario: Dict[str, Any]) -> str:
     """
     Generate a CUSTOMIZED stub test based on the specific scenario template.
-    Each scenario gets unique assertions and checks!
     """
     test_name = scenario['name']
     description = scenario.get('description', 'Test scenario')
@@ -480,10 +479,8 @@ def generate_scenario_stub(url: str, scenario: Dict[str, Any]) -> str:
     
     safe_name = re.sub(r'[^a-z0-9_]', '_', test_name.lower())
     
-    # Build UNIQUE assertions for this scenario
+    # Build assertions (same as before - keep your existing code)
     unique_assertions = []
-    
-    # Add validation checks
     for validation in validations[:6]:
         if "title" in validation.lower() and "uidai" in validation.lower():
             unique_assertions.append('            assert "UIDAI" in title or "Aadhaar" in title, "Page title should contain UIDAI or Aadhaar"')
@@ -491,35 +488,25 @@ def generate_scenario_stub(url: str, scenario: Dict[str, Any]) -> str:
             unique_assertions.append('            assert "1947" in content, "Helpline number 1947 should be displayed"')
         elif "email" in validation.lower() or "help@uidai" in validation.lower():
             unique_assertions.append('            assert "help@uidai.gov.in" in content, "Contact email should be present"')
-        elif "logo" in validation.lower():
-            unique_assertions.append('            # Check for UIDAI logo presence')
-        else:
-            # Generic assertion based on validation text
-            unique_assertions.append(f'            # Validation: {validation}')
     
-    # Build UNIQUE selector checks for this scenario
     unique_selectors = []
     for selector in key_selectors[:8]:
-        unique_selectors.append(f'''            # Check for: {selector}
-            try:
+        unique_selectors.append(f'''            try:
                 elem = await page.query_selector("{selector}")
                 if elem:
                     print(f"✓ Found: {selector}")
-                else:
-                    print(f"⚠ Missing: {selector}")
             except Exception as e:
                 print(f"⚠ Error checking {selector}: {{e}}")''')
     
-    # Build step comments
     step_comments = '\n'.join([f'# Step {i+1}: {step}' for i, step in enumerate(steps[:12])])
-    
     assertions_code = '\n'.join(unique_assertions) if unique_assertions else '            pass'
     selectors_code = '\n'.join(unique_selectors) if unique_selectors else '            pass'
     
+    # FIXED: Use environment variable for artifacts path
     return f'''import pytest
 from playwright.async_api import async_playwright
-import asyncio
 import os
+from pathlib import Path
 
 @pytest.mark.asyncio
 async def test_{safe_name}():
@@ -527,9 +514,6 @@ async def test_{safe_name}():
     {test_name}
     
     {description}
-    
-    Scenario Steps:
-{step_comments}
     """
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -541,59 +525,93 @@ async def test_{safe_name}():
         )
         page = await context.new_page()
         
-        os.makedirs("artifacts", exist_ok=True)
+        # CRITICAL: Get artifacts directory from environment
+        artifacts_base = os.getenv("ARTIFACTS_DIR")
+        if artifacts_base:
+            artifacts_dir = Path(artifacts_base)
+        else:
+            # Fallback: create in current directory
+            artifacts_dir = Path.cwd() / "artifacts"
+        
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+        print(f"📁 Artifacts: {{artifacts_dir}}")
         
         try:
             print(f"🚀 Starting: {test_name}")
-            print(f"Navigating to {{"{url}"}}...")
+            print(f"Navigating to {url}...")
             await page.goto("{url}", wait_until="networkidle", timeout=30000)
             
             title = await page.title()
             content = await page.content()
-            
             print(f"✓ Page loaded: {{title}}")
             
-            # Basic page validation
+            # Basic validation
             assert title, "Page should have a title"
             assert len(content) > 1000, "Page should have substantial content"
-            print(f"✓ Page content verified ({{len(content)}} bytes)")
+            print(f"✓ Content verified ({{len(content)}} bytes)")
             
-            # SCENARIO-SPECIFIC VALIDATIONS
-            print(f"\\n📋 Running scenario validations...")
+            # Scenario validations
+            print(f"\\n📋 Validations...")
 {assertions_code}
             
-            # SCENARIO-SPECIFIC ELEMENT CHECKS
-            print(f"\\n🔍 Checking key elements...")
+            # Element checks
+            print(f"\\n🔍 Element checks...")
 {selectors_code}
             
-            # Count interactive elements
+            # Interactive elements
             links = await page.query_selector_all("a")
             buttons = await page.query_selector_all("button")
             inputs = await page.query_selector_all("input")
-            forms = await page.query_selector_all("form")
             
-            total_interactive = len(links) + len(buttons) + len(inputs) + len(forms)
-            assert total_interactive > 10, f"Page should have interactive elements, found {{total_interactive}}"
-            print(f"✓ Found {{len(links)}} links, {{len(buttons)}} buttons, {{len(inputs)}} inputs, {{len(forms)}} forms")
+            total = len(links) + len(buttons) + len(inputs)
+            assert total > 10, f"Should have interactive elements, found {{total}}"
+            print(f"✓ Found {{len(links)}} links, {{len(buttons)}} buttons, {{len(inputs)}} inputs")
             
-            # Take screenshot
-            await page.screenshot(path=f"artifacts/{safe_name}_success.png", full_page=True)
-            print(f"✅ Test completed successfully: {test_name}")
+            # Success screenshot
+            screenshot_path = artifacts_dir / "{safe_name}_success.png"
+            await page.screenshot(path=str(screenshot_path), full_page=True)
+            print(f"✅ Test passed!")
+            print(f"📸 Screenshot: {{screenshot_path}}")
             
         except AssertionError as e:
-            print(f"❌ Assertion failed: {{e}}")
-            await page.screenshot(path=f"artifacts/{safe_name}_failure.png", full_page=True)
+            print(f"❌ Assertion: {{e}}")
+            screenshot_path = artifacts_dir / "{safe_name}_failure.png"
+            await page.screenshot(path=str(screenshot_path), full_page=True)
+            print(f"📸 Failure: {{screenshot_path}}")
             raise
             
         except Exception as e:
-            print(f"❌ Test failed: {{e}}")
-            await page.screenshot(path=f"artifacts/{safe_name}_exception.png", full_page=True)
+            print(f"❌ Exception: {{e}}")
+            screenshot_path = artifacts_dir / "{safe_name}_exception.png"
+            await page.screenshot(path=str(screenshot_path), full_page=True)
+            print(f"📸 Exception: {{screenshot_path}}")
             raise
             
         finally:
             await browser.close()
-'''
 
+# Scenario Steps:
+{step_comments}
+'''
+def fix_common_playwright_mistakes(code: str) -> str:
+    """
+    Fix common mistakes LLMs make with Playwright Python API
+    """
+    # Fix JavaScript-style camelCase to Python snake_case
+    fixes = {
+        'browser.newPage()': 'browser.new_page()',
+        'page.querySelector(': 'page.query_selector(',
+        'page.querySelectorAll(': 'page.query_selector_all(',
+        'page.waitForSelector(': 'page.wait_for_selector(',
+        'page.waitForTimeout(': 'page.wait_for_timeout(',
+        'page.waitForNavigation(': 'page.wait_for_navigation(',
+        'page.waitForLoadState(': 'page.wait_for_load_state(',
+    }
+    
+    for wrong, correct in fixes.items():
+        code = code.replace(wrong, correct)
+    
+    return code
 def generate_tests(
     run_id: str,
     url: str,
@@ -647,14 +665,28 @@ def generate_tests(
                         {chr(10).join(['- ' + sel for sel in scenario_obj.get('key_selectors', [])[:5]])}
                         """
 
-                # Call Ollama with scenario context
-                test_code = generate_with_model(
-                    model=model,
-                    url=url,
-                    pages=pages[:3],
-                    scenario_text=scenario_context if scenario_obj else None
-                )
-                
+                try:
+                    test_code = generate_with_model(
+                        model=model,
+                        url=url,
+                        pages=pages[:3],
+                        scenario_text=scenario_context if scenario_obj else None
+                    )
+                except Exception as e:
+                    print(f"❌ Exception calling model: {e}")
+                    test_code = None
+
+                # DEBUG: Log what we got back
+                if test_code:
+                    # Clean and fix common mistakes
+                    test_code = clean_generated_code(test_code)
+                    test_code = fix_common_playwright_mistakes(test_code)  # ADD THIS LINE
+                    
+                    print(f"🧹 After cleaning (first 300 chars):")
+                    print(test_code[:300])
+                else:
+                    print(f"❌ Model returned None")
+                    continue
                 if test_code and validate_test_code(test_code):
                     # Generate filename based on scenario
                     if scenario_obj:
@@ -693,7 +725,19 @@ def generate_tests(
                             "scenario_id": template_key if template_key else "auto"
                         }
                     }
-                    
+                else:
+                    print(f"❌ Validation failed")
+                    if test_code:
+                        # Check what's missing
+                        missing = []
+                        if 'playwright' not in test_code.lower():
+                            missing.append('playwright')
+                        if 'async def test_' not in test_code.lower():
+                            missing.append('async def test_')
+                        if 'await page.' not in test_code.lower():
+                            missing.append('await page.')
+                        print(f"   Missing: {', '.join(missing)}")
+                    continue  
             except Exception as e:
                 print(f"❌ Model {model} failed: {e}")
                 continue

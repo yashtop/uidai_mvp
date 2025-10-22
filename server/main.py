@@ -1,7 +1,7 @@
 # server/main.py
 """
 FastAPI Backend for UIDAI Testing Automation MVP
-Fixed imports for PYTHONPATH=server execution
+COMPLETE FIXED VERSION - All bugs resolved
 """
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks
@@ -136,7 +136,7 @@ async def run_pipeline_background(run_id: str, config: dict):
         RUNS_STORE[run_id]["phase"] = "generation"
         
         # Use Ollama models from your system
-        models = ["mistral:latest", "llama3.2:latest", "deepseek-r1:7b"] if config["useOllama"] else []
+        models = ["qwen2.5-coder:14b"] if config["useOllama"] else []
         
         gen_result = generate_tests(
             run_id=run_id,
@@ -173,44 +173,78 @@ async def run_pipeline_background(run_id: str, config: dict):
             timeout_seconds=preset_config["timeout"]
         )
         
+        # FIXED: Get summary and tests from TOP LEVEL (not nested in report)
         exit_code = run_result.get("exitCode", 1)
+        summary = run_result.get("summary", {})  # TOP LEVEL
+        all_tests = run_result.get("tests", [])  # TOP LEVEL
         
-        # Parse results
-        report = run_result.get("report", {})
-        summary = report.get("summary", {})
-        total = summary.get("total", 0)
-        passed = summary.get("passed", 0)
-        failed = summary.get("failed", 0)
+        # Parse counts with proper fallback
+        if summary and summary.get("total"):
+            total = int(summary.get("total", 0))
+            passed = int(summary.get("passed", 0))
+            failed = int(summary.get("failed", 0))
+            log.info(f"[{run_id}] From summary: total={total}, passed={passed}, failed={failed}")
+        else:
+            # Fallback: count from tests array
+            total = len(all_tests)
+            passed = sum(1 for t in all_tests if t.get("outcome") == "passed")
+            failed = sum(1 for t in all_tests if t.get("outcome") == "failed")
+            log.info(f"[{run_id}] Counted from tests: total={total}, passed={passed}, failed={failed}")
         
-        if exit_code == 0:
+        # Store results
+        RUNS_STORE[run_id]["results"] = run_result
+        
+        # Log with correct counts
+        if failed == 0 and passed > 0:
             add_log(run_id, f"✅ All tests passed! ({passed}/{total})")
             RUNS_STORE[run_id]["status"] = "completed"
+        elif total > 0:
+            add_log(run_id, f"❌ Tests failed ({failed}/{total} failed, {passed} passed)")
+            RUNS_STORE[run_id]["status"] = "failed"
         else:
-            add_log(run_id, f"❌ Some tests failed ({failed}/{total} failed)")
-            
-            # Phase 5: Self-Healing (only if configured and tests failed)
-            if config.get("maxHealAttempts", 0) > 0:
-                add_log(run_id, "🔧 Phase 5: Analyzing failures for self-healing...")
-                RUNS_STORE[run_id]["phase"] = "healing"
-                
-                heal_result = get_heal_suggestions(
-                    run_id=run_id,
-                    failingTestInfo={"report": report},
-                    generated_files=[t["path"] for t in gen_result.get("tests", [])],
-                    models=models
-                )
-                
-                RUNS_STORE[run_id]["healing"] = heal_result
-                
-                if heal_result.get("ok"):
-                    suggestions = heal_result.get("suggestions", [])
-                    add_log(run_id, f"💡 Generated {len(suggestions)} healing suggestion(s)")
-                else:
-                    add_log(run_id, "⚠️ Could not generate healing suggestions")
-            
+            add_log(run_id, f"⚠️ No tests executed")
             RUNS_STORE[run_id]["status"] = "failed"
         
-        RUNS_STORE[run_id]["results"] = run_result
+        # Phase 5: Self-Healing (only if configured and tests failed)
+        if failed > 0 and config.get("maxHealAttempts", 0) > 0:
+            add_log(run_id, "🔧 Phase 5: Analyzing failures for self-healing...")
+            RUNS_STORE[run_id]["phase"] = "healing"
+            
+            # FIXED: Get failed tests from TOP LEVEL all_tests array
+            failed_tests = [t for t in all_tests if t.get("outcome") == "failed"]
+            
+            log.info(f"[{run_id}] Healing: Found {len(failed_tests)} failed tests from {len(all_tests)} total")
+            if failed_tests:
+                log.info(f"[{run_id}] Failed test names: {[t.get('nodeid', 'unknown') for t in failed_tests]}")
+            
+            if failed_tests:
+                try:
+                    heal_result = get_heal_suggestions(
+                        run_id=run_id,
+                        failingTestInfo={
+                            "report": {"tests": failed_tests},
+                            "summary": {"total": total, "passed": passed, "failed": failed}
+                        },
+                        generated_files=[t.get("path", "") for t in gen_result.get("tests", [])],
+                        models=["qwen2.5-coder:14b"]  # Use same model as generation
+                    )
+                    
+                    RUNS_STORE[run_id]["healing"] = heal_result
+                    
+                    if heal_result.get("ok"):
+                        suggestions = heal_result.get("suggestions", [])
+                        add_log(run_id, f"💡 Generated {len(suggestions)} healing suggestion(s)")
+                    else:
+                        reason = heal_result.get("message", "Unknown")
+                        add_log(run_id, f"⚠️ Healing failed: {reason}")
+                except Exception as e:
+                    log.exception(f"[{run_id}] Healing error: {e}")
+                    add_log(run_id, f"⚠️ Healing error: {str(e)}")
+                    RUNS_STORE[run_id]["healing"] = {"ok": False, "reason": str(e)}
+            else:
+                add_log(run_id, "ℹ️ No test details available for healing")
+                RUNS_STORE[run_id]["healing"] = {"ok": False, "reason": "No test details"}
+        
         RUNS_STORE[run_id]["phase"] = "completed"
         RUNS_STORE[run_id]["completedAt"] = datetime.now().isoformat()
         
@@ -247,21 +281,20 @@ async def health_check():
     }
 
 @app.post("/api/run")
-async def start_run(request: RunRequest, background_tasks: BackgroundTasks):
+async def create_run(request: RunRequest, background_tasks: BackgroundTasks):
     """
-    Start a new test run
-    Endpoint matching UI expectations from RunCreator.jsx
+    Create and start a new test run
+    Used by RunCreator.jsx
     """
     run_id = str(uuid.uuid4())
-    run_name = request.runName or f"run-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    run_name = request.runName or f"Run {run_id[:8]}"
     
-    # Store run configuration
     RUNS_STORE[run_id] = {
         "runId": run_id,
         "runName": run_name,
         "targetUrl": request.url,
-        "status": "queued",
-        "phase": "queued",
+        "status": "pending",
+        "phase": "pending",
         "createdAt": datetime.now().isoformat(),
         "config": {
             "url": request.url,
@@ -381,10 +414,17 @@ async def get_results(run_id: str):
         return {"ok": False, "message": "Results not yet available"}
     
     results = run["results"]
-    report = results.get("report", {})
     
-    tests = report.get("tests", [])
-    summary = report.get("summary", {})
+    # FIXED: Get summary and tests from TOP LEVEL
+    summary = results.get("summary", {})
+    tests = results.get("tests", [])
+    
+    # Fallback: try to get from nested report if top level is empty
+    if not tests and "report" in results:
+        report = results.get("report", {})
+        tests = report.get("tests", [])
+        if not summary:
+            summary = report.get("summary", {})
     
     return {
         "ok": True,

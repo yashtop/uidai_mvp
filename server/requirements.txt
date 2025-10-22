@@ -7,3 +7,12 @@ fastapi>=0.110
 uvicorn[standard]>=0.23
 beautifulsoup4>=4.12
 playwright>=1.44
+# Database
+sqlalchemy==2.0.23
+alembic==1.13.1
+psycopg2-binary==2.9.9
+asyncpg==0.29.0
+
+# Enhanced capabilities
+beautifulsoup4==4.12.2
+lxml==4.9.3

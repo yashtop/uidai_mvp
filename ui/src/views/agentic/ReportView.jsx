@@ -136,7 +136,7 @@ export default function ReportView() {
 
   // Extract results data with proper type conversion
   const resultsData = runData.results || {};
-  const resultsSummary = resultsData.report.summary || {};
+  const resultsSummary = resultsData.summary || {};
   
   // CRITICAL: Convert string numbers to integers
   const totalTests = parseInt(resultsSummary.total) || parseInt(resultsSummary.collected) || 0;
