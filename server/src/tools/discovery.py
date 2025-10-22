@@ -40,7 +40,9 @@ def discover(run_id: str, url: str, level: int = 1, max_pages: int = 10, out_dir
         if cur in visited:
             continue
         try:
-            resp = requests.get(cur, timeout=10)
+            resp = requests.get(cur, timeout=30, headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            })
             resp.raise_for_status()
             soup = BeautifulSoup(resp.text, "html.parser")
             title = soup.title.string.strip() if soup.title else ""
