@@ -9,22 +9,34 @@ log = logging.getLogger(__name__)
 OLLAMA_HTTP = os.getenv("OLLAMA_HTTP", "http://localhost:11434")  # change if different
 OLLAMA_CLI = os.getenv("OLLAMA_CLI", "ollama")  # if you have ollama CLI
 
-def generate_with_model(model: str, payload: dict, format: str = "json", timeout: int = 30):
+def generate_with_model(model: str, payload: dict | None = None, format: str = "json", timeout: int = 30, **kwargs):
     """
-    Try HTTP Ollama endpoint first. Expected shape of request may vary depending on local Ollama version.
-    This function attempts a sensible default and returns parsed JSON when possible.
+    Flexible Ollama call.
+
+    You can call either:
+      - generate_with_model("mistral:latest", payload={"instruction": "...", "url": "..."} )
+    or
+      - generate_with_model("mistral:latest", url="...", pages=[...], instruction="...")
+
+    Returns parsed JSON when possible, or raw text.
     """
+    # Normalize payload: explicit payload param has priority; else build from kwargs
+    input_payload = payload if payload is not None else kwargs
+
+    # Prepare HTTP request to Ollama (common Ollama HTTP API shape)
     try:
-        url = f"{OLLAMA_HTTP}/api/generate"  # adjust if your endpoint differs
-        body = {"model": model, "input": payload, "format": format}
+        url = f"{OLLAMA_HTTP}/api/generate"
+        body = {"model": model, "input": input_payload, "format": format}
+        log.debug("OLLAMA HTTP request body: %s", json.dumps(body)[:2000])
         resp = requests.post(url, json=body, timeout=timeout)
         resp.raise_for_status()
+        # Try to parse JSON, otherwise return raw text
         try:
             data = resp.json()
         except Exception:
             return resp.text
-        # try to normalize typical response shapes
-        # if 'content' field present - return it
+
+        # Normalization for common shapes
         if isinstance(data, dict) and "content" in data:
             content = data["content"]
             if format == "json":
@@ -33,16 +45,16 @@ def generate_with_model(model: str, payload: dict, format: str = "json", timeout
                 try:
                     return json.loads(content)
                 except Exception:
-                    # return raw string for upstream repair
                     return content
             return data
         return data
     except Exception as e:
-        log.debug("HTTP Ollama failed, will try CLI fallback: %s", e)
+        log.debug("HTTP Ollama failed (%s), will try CLI fallback", e)
 
-    # CLI fallback: send JSON payload via subprocess (if ollama CLI supports)
+    # CLI fallback
     try:
-        # Write payload to temp file and call `ollama` CLI generate if supported.
+        # Build CLI input: send JSON that includes 'input' so CLI can read it
+        cli_input = json.dumps({"input": input_payload, "format": format})
         p = subprocess.Popen(
             [OLLAMA_CLI, "generate", model],
             stdin=subprocess.PIPE,
@@ -50,8 +62,7 @@ def generate_with_model(model: str, payload: dict, format: str = "json", timeout
             stderr=subprocess.PIPE,
             text=True,
         )
-        inp = json.dumps({"input": payload, "format": format})
-        out, err = p.communicate(inp, timeout=timeout)
+        out, err = p.communicate(cli_input, timeout=timeout)
         if p.returncode != 0:
             raise RuntimeError(f"ollama cli err: {err}")
         try:

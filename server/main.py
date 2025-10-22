@@ -1,529 +1,508 @@
-# server/main.py - ENHANCED VERSION
-import uuid, json, time, os
-from fastapi import FastAPI, BackgroundTasks, HTTPException, Query
-from fastapi.responses import StreamingResponse
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from pathlib import Path
-from src.tools.langchain_tools import pipeline_run
-from src.tools.healer import apply_patch
-import logging
+# server/main.py
+"""
+FastAPI Backend for UIDAI Testing Automation MVP
+Fixed imports for PYTHONPATH=server execution
+"""
 
+from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel, HttpUrl
+from typing import Optional, List, Dict, Any
+import asyncio
+import json
+import logging
+import uuid
+from pathlib import Path
+from datetime import datetime
+
+# Fixed imports for your project structure
+from src.tools.discovery import discover
+from src.tools.generator import generate_tests, SCENARIO_TEMPLATES
+from src.tools.runner import run_playwright_tests
+from src.tools.healer import get_heal_suggestions, apply_patch
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 log = logging.getLogger(__name__)
 
-app = FastAPI(title="UIDAI Agentic Runner - Enhanced")
+app = FastAPI(
+    title="UIDAI Testing Automation API",
+    version="1.0.0",
+    description="Automated testing for UIDAI.gov.in portal"
+)
 
-# Enable CORS for frontend
+# CORS - Allow frontend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify your frontend URL
+    allow_origins=["*"],  # In production: ["http://localhost:3000"]
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-RUNS_META = {}
-RUNS_LOGS = {}
-BASE_RUN_DIR = Path(os.getenv("UIDAI_RUNS_DIR", "/tmp/uidai_runs"))
+# In-memory storage (use Redis/PostgreSQL for production)
+RUNS_STORE = {}
+LOGS_STORE = {}
 
-def append_log(run_id, level, msg, meta=None):
-    entry = {"time": time.time(), "level": level, "msg": msg, "meta": meta}
-    RUNS_LOGS.setdefault(run_id, []).append(entry)
+# === Models matching UI expectations ===
 
 class RunRequest(BaseModel):
-    url: str
-    mode: str = "headless"  # headless | headed
-    preset: str = "balanced"  # quick | balanced | deep
-    useOllama: bool = True
-    runName: str = None
+    """Request model from RunCreator.jsx"""
+    url: str  # Target URL
+    mode: str = "headless"  # "headless" or "headed"
+    preset: str = "balanced"  # "quick", "balanced", or "deep"
+    useOllama: bool = True  # Always use Ollama for MVP
+    runName: Optional[str] = None
+    scenario: Optional[str] = None  # Template ID or empty for auto
     maxHealAttempts: int = 1
-    scenario: str = None  # NEW: scenario/seed support
 
-def work_run(run_id, payload):
-    """Background task that executes the pipeline"""
+# === Utility Functions ===
+
+def get_run_dir(run_id: str) -> Path:
+    """Get run directory path"""
+    return Path("/tmp/uidai_runs") / run_id
+
+def add_log(run_id: str, message: str):
+    """Add timestamped log message"""
+    if run_id not in LOGS_STORE:
+        LOGS_STORE[run_id] = []
+    timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+    log_msg = f"[{timestamp}] {message}"
+    LOGS_STORE[run_id].append(log_msg)
+    log.info(f"[{run_id}] {message}")
+
+def get_preset_config(preset: str) -> Dict[str, Any]:
+    """Convert preset to discovery configuration"""
+    configs = {
+        "quick": {"level": 1, "max_pages": 5, "timeout": 180},
+        "balanced": {"level": 1, "max_pages": 15, "timeout": 300},
+        "deep": {"level": 2, "max_pages": 30, "timeout": 600}
+    }
+    return configs.get(preset, configs["balanced"])
+
+async def run_pipeline_background(run_id: str, config: dict):
+    """
+    Background task to execute the complete testing pipeline
+    Matches the flow expected by UI components
+    """
     try:
-        append_log(run_id, "info", "Starting pipeline")
+        url = config["url"]
+        add_log(run_id, f"🚀 Starting pipeline for {url}")
+        add_log(run_id, f"Preset: {config['preset']}, Mode: {config['mode']}")
+        RUNS_STORE[run_id]["status"] = "running"
         
-        # Map UI params to backend params
-        level = 1 if payload.get("preset") == "quick" else (2 if payload.get("preset") == "balanced" else 3)
-        headed = payload.get("mode") == "headed"
-        seed = payload.get("scenario")  # Pass scenario as seed to generator
+        # Get preset configuration
+        preset_config = get_preset_config(config["preset"])
         
-        # Execute pipeline
-        res = pipeline_run(
-            run_id,
-            payload["url"],
-            level=level,
+        # Phase 1: Discovery
+        add_log(run_id, "📡 Phase 1: Discovery - Crawling UIDAI website...")
+        RUNS_STORE[run_id]["phase"] = "discovery"
+        
+        discovery_result = discover(
+            run_id=run_id,
+            url=url,
+            level=preset_config["level"],
+            max_pages=preset_config["max_pages"]
+        )
+        
+        pages = discovery_result.get("pages", [])
+        add_log(run_id, f"✓ Discovery complete: {len(pages)} pages found")
+        RUNS_STORE[run_id]["discovery"] = discovery_result
+        
+        if len(pages) == 0:
+            raise Exception("No pages discovered. Website might be unreachable.")
+        
+        # Phase 2: Scenario Selection/Generation
+        add_log(run_id, "🎯 Phase 2: Determining test scenario...")
+        RUNS_STORE[run_id]["phase"] = "scenario"
+        
+        scenario_param = config.get("scenario", "").strip()
+        
+        if not scenario_param:
+            add_log(run_id, "🤖 No scenario specified, using automatic detection")
+            scenario_param = "auto"
+        elif scenario_param in SCENARIO_TEMPLATES:
+            template = SCENARIO_TEMPLATES[scenario_param]
+            add_log(run_id, f"✓ Using template: {template['name']}")
+        else:
+            add_log(run_id, f"⚠️  Unknown scenario '{scenario_param}', using auto")
+            scenario_param = "auto"
+        
+        # Phase 3: Test Generation
+        add_log(run_id, "⚙️ Phase 3: Generating test code with AI...")
+        RUNS_STORE[run_id]["phase"] = "generation"
+        
+        # Use Ollama models from your system
+        models = ["mistral:latest", "llama3.2:latest", "deepseek-r1:7b"] if config["useOllama"] else []
+        
+        gen_result = generate_tests(
+            run_id=run_id,
+            url=url,
+            pages=pages,
+            scenario=scenario_param,
+            models=models
+        )
+        
+        if not gen_result.get("ok"):
+            raise Exception("Test generation failed")
+        
+        test_count = gen_result.get("count", 0)
+        model_used = gen_result.get("metadata", {}).get("model", "unknown")
+
+        scenario_obj = gen_result.get("scenario") or {}
+        scenario_name = scenario_obj.get("name", "Unknown")
+        
+        add_log(run_id, f"✓ Generated {test_count} test file(s) using {model_used}")
+        add_log(run_id, f"✓ Scenario: {scenario_name}")
+        RUNS_STORE[run_id]["tests"] = gen_result
+        
+        # Phase 4: Test Execution
+        add_log(run_id, "🧪 Phase 4: Executing tests with Playwright...")
+        RUNS_STORE[run_id]["phase"] = "execution"
+        
+        tests_dir = get_run_dir(run_id) / "generator" / "tests"
+        headed = config["mode"] == "headed"
+        
+        run_result = run_playwright_tests(
+            run_id=run_id,
+            gen_dir=str(tests_dir),
             headed=headed,
-            heal="auto",  # Enable auto-healing
-            models=None,  # Use default models
+            timeout_seconds=preset_config["timeout"]
         )
         
-        # Update metadata
-        success = any(
-            s["step"] == "runner" and s["result"].get("exitCode", 1) == 0
-            for s in res["steps"]
-        )
+        exit_code = run_result.get("exitCode", 1)
         
-        RUNS_META[run_id].update({
-            "status": "completed" if success else "failed",
-            "result": res,
-            "completedAt": time.time()
-        })
+        # Parse results
+        report = run_result.get("report", {})
+        summary = report.get("summary", {})
+        total = summary.get("total", 0)
+        passed = summary.get("passed", 0)
+        failed = summary.get("failed", 0)
         
-        append_log(run_id, "info", "Pipeline finished", {
-            "summary": RUNS_META[run_id]["status"],
-            "exitCode": res.get("steps", [{}])[-1].get("result", {}).get("exitCode")
-        })
-        
-    except Exception as e:
-        log.exception("Pipeline error for run %s: %s", run_id, e)
-        RUNS_META[run_id].update({"status": "failed", "error": str(e)})
-        append_log(run_id, "error", f"Pipeline error: {e}")
-
-
-# ===========================
-# EXISTING ENDPOINTS (Updated)
-# ===========================
-
-@app.post("/api/run")
-def create_run(req: RunRequest, background_tasks: BackgroundTasks):
-    """Create and start a new test run"""
-    run_id = str(uuid.uuid4())
-    meta = {
-        "runId": run_id,
-        "targetUrl": req.url,
-        "mode": req.mode,
-        "preset": req.preset,
-        "scenario": req.scenario,
-        "createdAt": time.time(),
-        "status": "running",
-    }
-    RUNS_META[run_id] = meta
-    RUNS_LOGS[run_id] = []
-    append_log(run_id, "info", "Run queued", {"url": req.url})
-    background_tasks.add_task(work_run, run_id, req.dict())
-    return {"runId": run_id, "status": "running"}
-
-
-@app.get("/api/run/{run_id}")
-def get_run(run_id: str):
-    """Get run metadata (includes full result if completed)"""
-    if run_id not in RUNS_META:
-        raise HTTPException(status_code=404, detail="Run not found")
-    return RUNS_META[run_id]
-
-
-@app.get("/api/run/{run_id}/logs/stream")
-def stream_logs(run_id: str):
-    """Stream logs via Server-Sent Events"""
-    if run_id not in RUNS_LOGS:
-        raise HTTPException(status_code=404, detail="Run not found")
-    
-    def event_stream():
-        last = 0
-        while True:
-            entries = RUNS_LOGS.get(run_id, [])
-            while last < len(entries):
-                e = entries[last]
-                last += 1
-                # Format log line for display
-                line = f"[{e['level'].upper()}] {e['msg']}"
-                yield f"data: {json.dumps({'line': line, 'raw': e})}\n\n"
+        if exit_code == 0:
+            add_log(run_id, f"✅ All tests passed! ({passed}/{total})")
+            RUNS_STORE[run_id]["status"] = "completed"
+        else:
+            add_log(run_id, f"❌ Some tests failed ({failed}/{total} failed)")
             
-            status = RUNS_META.get(run_id, {}).get("status")
-            if status in ("completed", "failed"):
-                break
-            time.sleep(0.5)
+            # Phase 5: Self-Healing (only if configured and tests failed)
+            if config.get("maxHealAttempts", 0) > 0:
+                add_log(run_id, "🔧 Phase 5: Analyzing failures for self-healing...")
+                RUNS_STORE[run_id]["phase"] = "healing"
+                
+                heal_result = get_heal_suggestions(
+                    run_id=run_id,
+                    failingTestInfo={"report": report},
+                    generated_files=[t["path"] for t in gen_result.get("tests", [])],
+                    models=models
+                )
+                
+                RUNS_STORE[run_id]["healing"] = heal_result
+                
+                if heal_result.get("ok"):
+                    suggestions = heal_result.get("suggestions", [])
+                    add_log(run_id, f"💡 Generated {len(suggestions)} healing suggestion(s)")
+                else:
+                    add_log(run_id, "⚠️ Could not generate healing suggestions")
+            
+            RUNS_STORE[run_id]["status"] = "failed"
         
-        # Send final logs
-        entries = RUNS_LOGS.get(run_id, [])
-        while last < len(entries):
-            e = entries[last]
-            last += 1
-            line = f"[{e['level'].upper()}] {e['msg']}"
-            yield f"data: {json.dumps({'line': line, 'raw': e})}\n\n"
+        RUNS_STORE[run_id]["results"] = run_result
+        RUNS_STORE[run_id]["phase"] = "completed"
+        RUNS_STORE[run_id]["completedAt"] = datetime.now().isoformat()
         
-        yield f"data: {json.dumps({'line': '=== Stream closed ==='})}\n\n"
-    
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
-
-
-# ===========================
-# NEW ENDPOINTS FOR UI
-# ===========================
-
-@app.get("/api/runs")
-def list_runs(
-    limit: int = Query(50, ge=1, le=200),
-    offset: int = Query(0, ge=0),
-    status: str = Query(None, regex="^(running|completed|failed|queued)$")
-):
-    """List all runs with pagination and filtering"""
-    all_runs = list(RUNS_META.values())
-    
-    # Filter by status if provided
-    if status:
-        all_runs = [r for r in all_runs if r.get("status") == status]
-    
-    # Sort by creation time (newest first)
-    all_runs.sort(key=lambda x: x.get("createdAt", 0), reverse=True)
-    
-    # Paginate
-    total = len(all_runs)
-    runs = all_runs[offset:offset + limit]
-    
-    return {
-        "runs": runs,
-        "total": total,
-        "limit": limit,
-        "offset": offset
-    }
-
-
-@app.get("/api/run/{run_id}/discovery")
-def get_discovery(run_id: str):
-    """Get discovery results (pages, selectors, elements)"""
-    if run_id not in RUNS_META:
-        raise HTTPException(status_code=404, detail="Run not found")
-    
-    # Read discovery summary from file
-    discovery_file = BASE_RUN_DIR / run_id / "discovery" / "summary.json"
-    
-    if not discovery_file.exists():
-        # Check if discovery step completed in metadata
-        meta = RUNS_META[run_id]
-        result = meta.get("result", {})
-        steps = result.get("steps", [])
-        disc_step = next((s for s in steps if s["step"] == "discovery"), None)
+        add_log(run_id, "🏁 Pipeline completed")
         
-        if disc_step and disc_step.get("result"):
-            return {
-                "ok": True,
-                "pages": disc_step["result"].get("pages", []),
-                "metadata": disc_step["result"].get("metadata", {})
-            }
-        
-        return {
-            "ok": False,
-            "message": "Discovery not yet completed or failed"
-        }
-    
-    try:
-        data = json.loads(discovery_file.read_text(encoding="utf-8"))
-        return {
-            "ok": True,
-            "pages": data.get("pages", []),
-            "metadata": data.get("meta", {})
-        }
     except Exception as e:
-        log.exception("Failed to read discovery file: %s", e)
-        raise HTTPException(status_code=500, detail=f"Failed to read discovery: {e}")
+        log.exception(f"Pipeline failed for run {run_id}: {e}")
+        add_log(run_id, f"💥 Pipeline failed: {str(e)}")
+        RUNS_STORE[run_id]["status"] = "failed"
+        RUNS_STORE[run_id]["phase"] = "failed"
+        RUNS_STORE[run_id]["error"] = str(e)
+        RUNS_STORE[run_id]["completedAt"] = datetime.now().isoformat()
 
 
-@app.get("/api/run/{run_id}/tests")
-def get_generated_tests(run_id: str):
-    """Get generated test cases (before execution)"""
-    if run_id not in RUNS_META:
-        raise HTTPException(status_code=404, detail="Run not found")
-    
-    # Check metadata for generator step
-    meta = RUNS_META[run_id]
-    result = meta.get("result", {})
-    steps = result.get("steps", [])
-    gen_step = next((s for s in steps if s["step"] == "generator"), None)
-    
-    if not gen_step:
-        return {
-            "ok": False,
-            "message": "Test generation not yet started"
-        }
-    
-    gen_result = gen_step.get("result", {})
-    
-    if not gen_result.get("ok"):
-        return {
-            "ok": False,
-            "message": "Test generation failed",
-            "error": gen_result.get("message")
-        }
-    
-    # Load actual test file contents
-    tests = gen_result.get("tests", [])
-    tests_with_content = []
-    
-    for t in tests:
-        path = Path(t["path"])
-        if path.exists():
-            try:
-                content = path.read_text(encoding="utf-8")
-                tests_with_content.append({
-                    "filename": t["filename"],
-                    "path": str(path),
-                    "content": content,
-                    "lines": len(content.splitlines())
-                })
-            except Exception as e:
-                log.warning("Failed to read test file %s: %s", path, e)
-                tests_with_content.append({
-                    "filename": t["filename"],
-                    "path": str(path),
-                    "error": str(e)
-                })
-    
+# === API Endpoints ===
+
+@app.get("/")
+async def root():
+    """API root - health check"""
     return {
-        "ok": True,
-        "tests": tests_with_content,
-        "metadata": gen_result.get("metadata", {}),
-        "count": len(tests_with_content)
-    }
-
-
-@app.get("/api/run/{run_id}/results")
-def get_test_results(run_id: str):
-    """Get test execution results (detailed pass/fail per test)"""
-    if run_id not in RUNS_META:
-        raise HTTPException(status_code=404, detail="Run not found")
-    
-    # Check metadata for runner step
-    meta = RUNS_META[run_id]
-    result = meta.get("result", {})
-    steps = result.get("steps", [])
-    run_step = next((s for s in steps if s["step"] == "runner"), None)
-    
-    if not run_step:
-        return {
-            "ok": False,
-            "message": "Test execution not yet started"
-        }
-    
-    run_result = run_step.get("result", {})
-    
-    # Parse JSON report if available
-    report = run_result.get("report")
-    
-    if not report:
-        return {
-            "ok": False,
-            "message": "Test execution completed but report not available",
-            "exitCode": run_result.get("exitCode"),
-            "stdout": run_result.get("stdout")
-        }
-    
-    # Extract test results from pytest JSON report
-    tests = []
-    summary = report.get("summary", {})
-    
-    for test in report.get("tests", []):
-        tests.append({
-            "nodeid": test.get("nodeid"),
-            "outcome": test.get("outcome"),  # passed | failed | skipped
-            "duration": test.get("call", {}).get("duration", 0),
-            "error": test.get("call", {}).get("longrepr") if test.get("outcome") == "failed" else None
-        })
-    
-    return {
-        "ok": True,
-        "summary": {
-            "total": summary.get("total", 0),
-            "passed": summary.get("passed", 0),
-            "failed": summary.get("failed", 0),
-            "skipped": summary.get("skipped", 0),
-            "duration": summary.get("duration", 0)
-        },
-        "tests": tests,
-        "exitCode": run_result.get("exitCode"),
-        "artifacts": run_result.get("artifacts", [])
-    }
-
-
-@app.get("/api/run/{run_id}/healing")
-def get_healing_suggestions(run_id: str):
-    """Get auto-healing suggestions"""
-    if run_id not in RUNS_META:
-        raise HTTPException(status_code=404, detail="Run not found")
-    
-    # Check metadata for healer step
-    meta = RUNS_META[run_id]
-    result = meta.get("result", {})
-    steps = result.get("steps", [])
-    heal_step = next((s for s in steps if s["step"] == "healer"), None)
-    
-    if not heal_step:
-        return {
-            "ok": False,
-            "message": "Healing not triggered (no test failures)"
-        }
-    
-    heal_result = heal_step.get("result", {})
-    
-    if not heal_result.get("ok"):
-        return {
-            "ok": False,
-            "message": heal_result.get("message", "Healing failed")
-        }
-    
-    return {
-        "ok": True,
-        "suggestions": heal_result.get("suggestions", []),
-        "fromModel": heal_result.get("fromModel")
-    }
-
-
-@app.get("/api/run/{run_id}/report")
-def get_report(run_id: str):
-    """Get comprehensive report with all data"""
-    if run_id not in RUNS_META:
-        raise HTTPException(status_code=404, detail="Run not found")
-    
-    meta = RUNS_META[run_id]
-    
-    if meta.get("status") not in ("completed", "failed"):
-        return {
-            "ok": False,
-            "message": "Run not yet completed",
-            "status": meta.get("status")
-        }
-    
-    # Gather all data
-    try:
-        discovery_data = get_discovery(run_id)
-    except:
-        discovery_data = {"ok": False}
-    
-    try:
-        tests_data = get_generated_tests(run_id)
-    except:
-        tests_data = {"ok": False}
-    
-    try:
-        results_data = get_test_results(run_id)
-    except:
-        results_data = {"ok": False}
-    
-    try:
-        healing_data = get_healing_suggestions(run_id)
-    except:
-        healing_data = {"ok": False}
-    
-    return {
-        "runId": run_id,
-        "targetUrl": meta.get("targetUrl"),
-        "status": meta.get("status"),
-        "createdAt": meta.get("createdAt"),
-        "completedAt": meta.get("completedAt"),
-        "duration": (meta.get("completedAt", time.time()) - meta.get("createdAt", time.time())),
-        "discovery": discovery_data,
-        "tests": tests_data,
-        "results": results_data,
-        "healing": healing_data,
-        "scenario": meta.get("scenario"),
-        "url": f"/report/{run_id}"  # For opening in new tab
-    }
-
-
-# ===========================
-# HEALER ENDPOINTS (Updated)
-# ===========================
-
-class ApplyPatchBody(BaseModel):
-    patchId: str
-
-@app.post("/api/run/{run_id}/healer/apply")
-def healer_apply(run_id: str, body: ApplyPatchBody, background_tasks: BackgroundTasks):
-    """Manually approve and apply a healing patch"""
-    if run_id not in RUNS_META:
-        raise HTTPException(status_code=404, detail="Run not found")
-    
-    healer_dir = BASE_RUN_DIR / run_id / "healer"
-    if not healer_dir.exists():
-        raise HTTPException(status_code=404, detail="No healer suggestions found")
-    
-    # Find suggestion with given patchId
-    patch = None
-    for f in healer_dir.glob("*.json"):
-        try:
-            data = json.loads(f.read_text(encoding="utf-8"))
-            suggestions = data.get("suggestions", []) if isinstance(data, dict) else []
-            for s in suggestions:
-                if s.get("patchId") == body.patchId:
-                    patch = s
-                    break
-            if patch:
-                break
-        except Exception:
-            continue
-    
-    if not patch:
-        raise HTTPException(status_code=404, detail="patchId not found")
-    
-    # Apply patch
-    gen_dir = BASE_RUN_DIR / run_id / "generator" / "tests"
-    if not gen_dir.exists():
-        raise HTTPException(status_code=500, detail="Generated tests dir not found")
-    
-    try:
-        apply_res = apply_patch(patch, str(gen_dir))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Patch application failed: {e}")
-    
-    append_log(run_id, "info", f"Manual patch approved: {body.patchId}", {"apply_res": apply_res})
-    
-    # Create new run for retry
-    new_run_id = f"{run_id}-healed-{int(time.time())}"
-    new_meta = RUNS_META[run_id].copy()
-    new_meta.update({
-        "runId": new_run_id,
-        "createdAt": time.time(),
+        "service": "UIDAI Testing Automation API",
+        "version": "1.0.0",
         "status": "running",
-        "parentRun": run_id
-    })
-    RUNS_META[new_run_id] = new_meta
-    RUNS_LOGS[new_run_id] = []
-    
-    background_tasks.add_task(work_run, new_run_id, new_meta)
-    
-    return {"success": True, "newRunId": new_run_id}
+        "target": "https://uidai.gov.in/en/"
+    }
 
-
-# ===========================
-# HEALTH CHECK
-# ===========================
-
-@app.get("/health")
-def health_check():
+@app.get("/api/health")
+async def health_check():
     """Health check endpoint"""
     return {
         "status": "healthy",
-        "runs": len(RUNS_META),
-        "timestamp": time.time()
+        "timestamp": datetime.now().isoformat(),
+        "runs": len(RUNS_STORE)
     }
 
-
-@app.get("/")
-def root():
-    """API info"""
-    return {
-        "name": "UIDAI Agentic Test Runner API",
-        "version": "2.0.0",
-        "endpoints": {
-            "runs": {
-                "POST /api/run": "Create new test run",
-                "GET /api/runs": "List all runs",
-                "GET /api/run/{id}": "Get run metadata"
-            },
-            "data": {
-                "GET /api/run/{id}/discovery": "Get discovery results",
-                "GET /api/run/{id}/tests": "Get generated tests",
-                "GET /api/run/{id}/results": "Get execution results",
-                "GET /api/run/{id}/healing": "Get healing suggestions",
-                "GET /api/run/{id}/report": "Get comprehensive report"
-            },
-            "streaming": {
-                "GET /api/run/{id}/logs/stream": "Stream logs (SSE)"
-            },
-            "healing": {
-                "POST /api/run/{id}/healer/apply": "Apply healing patch"
-            }
+@app.post("/api/run")
+async def start_run(request: RunRequest, background_tasks: BackgroundTasks):
+    """
+    Start a new test run
+    Endpoint matching UI expectations from RunCreator.jsx
+    """
+    run_id = str(uuid.uuid4())
+    run_name = request.runName or f"run-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    
+    # Store run configuration
+    RUNS_STORE[run_id] = {
+        "runId": run_id,
+        "runName": run_name,
+        "targetUrl": request.url,
+        "status": "queued",
+        "phase": "queued",
+        "createdAt": datetime.now().isoformat(),
+        "config": {
+            "url": request.url,
+            "mode": request.mode,
+            "preset": request.preset,
+            "useOllama": request.useOllama,
+            "scenario": request.scenario or "",
+            "maxHealAttempts": request.maxHealAttempts
         }
     }
+    
+    LOGS_STORE[run_id] = []
+    
+    log.info(f"Created run: {run_id} for {request.url}")
+    
+    # Start background pipeline
+    background_tasks.add_task(
+        run_pipeline_background,
+        run_id,
+        RUNS_STORE[run_id]["config"]
+    )
+    
+    return {
+        "ok": True,
+        "runId": run_id,
+        "runName": run_name,
+        "message": "Run started successfully"
+    }
+
+@app.get("/api/runs")
+async def list_runs():
+    """
+    Get list of all runs
+    Used by RunsDashboard.jsx
+    """
+    runs = [
+        {
+            "runId": r["runId"],
+            "runName": r.get("runName", r["runId"][:8]),
+            "targetUrl": r["targetUrl"],
+            "status": r["status"],
+            "phase": r.get("phase", "unknown"),
+            "createdAt": r["createdAt"],
+            "completedAt": r.get("completedAt")
+        }
+        for r in sorted(
+            RUNS_STORE.values(),
+            key=lambda x: x["createdAt"],
+            reverse=True
+        )
+    ]
+    return {"runs": runs}
+
+@app.get("/api/run/{run_id}")
+async def get_run(run_id: str):
+    """Get detailed run information"""
+    if run_id not in RUNS_STORE:
+        raise HTTPException(status_code=404, detail="Run not found")
+    
+    return RUNS_STORE[run_id]
+
+@app.get("/api/run/{run_id}/discovery")
+async def get_discovery(run_id: str):
+    """
+    Get discovery results
+    Used by DiscoveryView.jsx
+    """
+    if run_id not in RUNS_STORE:
+        raise HTTPException(status_code=404, detail="Run not found")
+    
+    run = RUNS_STORE[run_id]
+    
+    if "discovery" not in run:
+        return {"ok": False, "message": "Discovery not yet completed"}
+    
+    discovery = run["discovery"]
+    return {
+        "ok": True,
+        "pages": discovery.get("pages", []),
+        "metadata": discovery.get("metadata", {})
+    }
+
+@app.get("/api/run/{run_id}/tests")
+async def get_tests(run_id: str):
+    """
+    Get generated tests
+    Used by TestsView.jsx
+    """
+    if run_id not in RUNS_STORE:
+        raise HTTPException(status_code=404, detail="Run not found")
+    
+    run = RUNS_STORE[run_id]
+    
+    if "tests" not in run:
+        return {"ok": False, "message": "Tests not yet generated"}
+    
+    tests_data = run["tests"]
+    return {
+        "ok": True,
+        "tests": tests_data.get("tests", []),
+        "count": tests_data.get("count", 0),
+        "metadata": tests_data.get("metadata", {})
+    }
+
+@app.get("/api/run/{run_id}/results")
+async def get_results(run_id: str):
+    """
+    Get test execution results
+    Used by ResultsView.jsx
+    """
+    if run_id not in RUNS_STORE:
+        raise HTTPException(status_code=404, detail="Run not found")
+    
+    run = RUNS_STORE[run_id]
+    
+    if "results" not in run:
+        return {"ok": False, "message": "Results not yet available"}
+    
+    results = run["results"]
+    report = results.get("report", {})
+    
+    tests = report.get("tests", [])
+    summary = report.get("summary", {})
+    
+    return {
+        "ok": True,
+        "summary": summary,
+        "tests": tests,
+        "exitCode": results.get("exitCode", 1),
+        "timestamp": results.get("timestamp")
+    }
+
+@app.get("/api/run/{run_id}/healing")
+async def get_healing(run_id: str):
+    """Get self-healing suggestions"""
+    if run_id not in RUNS_STORE:
+        raise HTTPException(status_code=404, detail="Run not found")
+    
+    run = RUNS_STORE[run_id]
+    
+    if "healing" not in run:
+        return {"ok": False, "message": "No healing suggestions available"}
+    
+    return run["healing"]
+
+@app.get("/api/run/{run_id}/logs/stream")
+async def stream_logs(run_id: str):
+    """
+    Stream logs via Server-Sent Events
+    Used by RunsDashboard.jsx for live log streaming
+    """
+    if run_id not in RUNS_STORE:
+        raise HTTPException(status_code=404, detail="Run not found")
+    
+    async def event_generator():
+        # Send existing logs first
+        if run_id in LOGS_STORE:
+            for log_line in LOGS_STORE[run_id]:
+                yield f"data: {json.dumps({'line': log_line})}\n\n"
+                await asyncio.sleep(0.01)
+        
+        # Stream new logs
+        last_count = len(LOGS_STORE.get(run_id, []))
+        
+        while True:
+            if run_id in LOGS_STORE:
+                logs = LOGS_STORE[run_id]
+                if len(logs) > last_count:
+                    for log_line in logs[last_count:]:
+                        yield f"data: {json.dumps({'line': log_line})}\n\n"
+                    last_count = len(logs)
+            
+            # Check if run completed
+            if run_id in RUNS_STORE:
+                status = RUNS_STORE[run_id].get("status")
+                if status in ["completed", "failed"]:
+                    yield f"data: {json.dumps({'line': f'--- {status.upper()} ---'})}\n\n"
+                    break
+            
+            await asyncio.sleep(0.5)
+    
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no"
+        }
+    )
+
+@app.get("/api/run/{run_id}/report")
+async def get_full_report(run_id: str):
+    """
+    Get comprehensive report with all phases
+    Used by ReportView.jsx
+    """
+    if run_id not in RUNS_STORE:
+        raise HTTPException(status_code=404, detail="Run not found")
+    
+    run = RUNS_STORE[run_id]
+    
+    return {
+        "ok": True,
+        "runId": run_id,
+        "runName": run.get("runName"),
+        "status": run["status"],
+        "targetUrl": run["targetUrl"],
+        "phases": {
+            "discovery": run.get("discovery"),
+            "tests": run.get("tests"),
+            "results": run.get("results"),
+            "healing": run.get("healing")
+        },
+        "timeline": {
+            "createdAt": run["createdAt"],
+            "completedAt": run.get("completedAt")
+        },
+        "logs": LOGS_STORE.get(run_id, [])
+    }
+
+@app.get("/api/scenarios/templates")
+async def get_scenario_templates():
+    """
+    Get available scenario templates
+    Can be used by UI to show template options
+    """
+    return {
+        "ok": True,
+        "templates": [
+            {
+                "id": key,
+                "name": val["name"],
+                "description": val["description"],
+                "steps": len(val.get("steps", []))
+            }
+            for key, val in SCENARIO_TEMPLATES.items()
+        ]
+    }
+
+if __name__ == "__main__":
+    import uvicorn
+    log.info("Starting UIDAI Testing Automation API...")
+    uvicorn.run(app, host="0.0.0.0", port=8000)

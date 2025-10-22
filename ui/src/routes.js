@@ -32,14 +32,14 @@ const routes = [
     icon: <Icon as={MdBarChart} width="20px" height="20px" color="inherit" />,
     component: <RunsDashboard />,
   },
-  // Detail views (hidden from sidebar, accessed via dashboard)
+  // Detail views (hidden from sidebar)
   {
     name: "Discovery Results",
     layout: "/admin",
     path: "/discovery/:runId",
     icon: <Icon as={MdSearch} width="20px" height="20px" color="inherit" />,
     component: <DiscoveryView />,
-    invisible: true, // Hide from sidebar
+    invisible: true,
   },
   {
     name: "Generated Tests",

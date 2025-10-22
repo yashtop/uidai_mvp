@@ -1,4 +1,3 @@
-// ui/src/views/agentic/ReportView.jsx
 import React, { useEffect, useState } from "react";
 import {
   Box,
@@ -13,7 +12,6 @@ import {
   HStack,
   Badge,
   Card,
-  CardHeader,
   CardBody,
   SimpleGrid,
   Stat,
@@ -23,13 +21,11 @@ import {
   Button,
   ButtonGroup,
   Divider,
-  Tabs,
-  TabList,
-  TabPanels,
-  Tab,
-  TabPanel,
+  Fade,
+  Icon,
 } from "@chakra-ui/react";
 import { useParams, useNavigate } from "react-router-dom";
+import { MdCheckCircle, MdCancel, MdAccessTime, MdSpeed,MdReport,MdRefresh } from "react-icons/md";
 import axios from "axios";
 
 const API = process.env.REACT_APP_API_BASE || "http://localhost:8000";
@@ -39,7 +35,7 @@ export default function ReportView() {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [reportData, setReportData] = useState(null);
+  const [runData, setRunData] = useState(null);
 
   useEffect(() => {
     loadReport();
@@ -49,11 +45,14 @@ export default function ReportView() {
     setLoading(true);
     setError(null);
     try {
-      const res = await axios.get(`${API}/api/run/${runId}/report`);
-      if (res.data.runId) {
-        setReportData(res.data);
+      // Get full run data from main endpoint
+      const res = await axios.get(`${API}/api/run/${runId}`);
+      console.log("Run data loaded:", res.data);
+      
+      if (res.data && res.data.runId) {
+        setRunData(res.data);
       } else {
-        setError(res.data.message || "Report not yet available");
+        setError("Run data not available");
       }
     } catch (e) {
       console.error("Failed to load report:", e);
@@ -66,7 +65,7 @@ export default function ReportView() {
   if (loading) {
     return (
       <Box p="6" textAlign="center">
-        <Spinner size="xl" color="blue.500" thickness="4px" mb="4" />
+        <Spinner size="xl" color="purple.500" thickness="4px" mb="4" />
         <Text color="gray.600">Loading comprehensive report...</Text>
       </Box>
     );
@@ -82,420 +81,421 @@ export default function ReportView() {
             <AlertDescription>{error}</AlertDescription>
           </Box>
         </Alert>
+        <Button mt="4" colorScheme="purple" onClick={() => navigate("/admin/runs")}>
+          Back to Dashboard
+        </Button>
       </Box>
     );
   }
 
-  if (!reportData) {
+  if (!runData) {
     return (
       <Box p="6">
         <Alert status="info" rounded="md">
           <AlertIcon />
           No report data available
         </Alert>
+        <Button mt="4" colorScheme="purple" onClick={() => navigate("/admin/runs")}>
+          Back to Dashboard
+        </Button>
       </Box>
     );
   }
 
-  const {
-    targetUrl,
-    status,
-    createdAt,
-    completedAt,
-    duration,
-    discovery = {},
-    tests = {},
-    results = {},
-    healing = {},
-    scenario,
-  } = reportData;
+  // Extract basic info
+  const targetUrl = runData.targetUrl || "Unknown";
+  const status = runData.status || "unknown";
+  const createdAt = runData.createdAt;
+  const completedAt = runData.completedAt;
+  const scenario = runData.config?.scenario || "auto-discovery";
 
-  const durationMin = (duration / 60).toFixed(1);
-  const passRate = results.ok && results.summary
-    ? ((results.summary.passed / results.summary.total) * 100).toFixed(1)
-    : 0;
+  // Calculate duration
+  let durationMin = "N/A";
+  let durationSec = 0;
+  if (completedAt && createdAt) {
+    try {
+      const start = new Date(createdAt).getTime();
+      const end = new Date(completedAt).getTime();
+      durationSec = (end - start) / 1000;
+      durationMin = (durationSec / 60).toFixed(1);
+    } catch (e) {
+      console.error("Error calculating duration:", e);
+    }
+  }
+
+  // Extract discovery data
+  const discoveryPages = runData.discovery?.pages || [];
+  const pagesCount = discoveryPages.length;
+  const elementsCount = discoveryPages.reduce((sum, p) => sum + (p.selectors?.length || 0), 0);
+  const discoveryOk = pagesCount > 0;
+
+  // Extract tests data
+  const testsData = runData.tests || {};
+  const testsCount = testsData.count || testsData.tests?.length || 0;
+  const testsOk = testsCount > 0;
+
+  // Extract results data with proper type conversion
+  const resultsData = runData.results || {};
+  const resultsSummary = resultsData.report.summary || {};
+  
+  // CRITICAL: Convert string numbers to integers
+  const totalTests = parseInt(resultsSummary.total) || parseInt(resultsSummary.collected) || 0;
+  const passedTests = parseInt(resultsSummary.passed) || 0;
+  const failedTests = parseInt(resultsSummary.failed) || 0;
+  const skippedTests = parseInt(resultsSummary.skipped) || 0;
+  
+  // Check if results are OK (handle both number and string)
+  const exitCode = resultsData.exitCode;
+  const resultsOk = exitCode === 0 || exitCode === "0";
+  
+  // Calculate pass rate with proper logic
+  let passRate = "0";
+  if (totalTests > 0) {
+    passRate = ((passedTests / totalTests) * 100).toFixed(1);
+  } else if (resultsOk && passedTests > 0) {
+    // If exitCode is 0 but we have no total, assume all passed
+    passRate = "100";
+  }
+  
+  console.log("Results debug:", {
+    totalTests,
+    passedTests,
+    failedTests,
+    exitCode,
+    resultsOk,
+    passRate,
+    raw: runData
+  });
+
+  // Healing data
+  const healingData = runData.healing || {};
+  const healingOk = healingData.ok || false;
+
+  // Format scenario name
+  const scenarioName = scenario === "auto-discovery" 
+    ? "AUTO-DISCOVERY"
+    : scenario.replace(/-/g, ' ').split(' ').map(w => 
+        w.charAt(0).toUpperCase() + w.slice(1)
+      ).join(' ');
+
+  // Get pass rate color
+  const getPassRateColor = (rate) => {
+    const numRate = parseFloat(rate);
+    if (numRate >= 80) return "green.600";
+    if (numRate >= 50) return "orange.600";
+    if (numRate > 0) return "red.600";
+    return "gray.600";
+  };
 
   return (
-    <Box p="6">
-      <VStack align="stretch" spacing="6">
-        {/* Header with Actions */}
-        <HStack justify="space-between" align="start">
-          <Box>
-            <Heading size="lg" mb="2">
-              Test Run Report
-            </Heading>
-            <Text color="gray.600" fontSize="sm" mb="1">
-              Run ID: <Badge fontFamily="monospace" fontSize="xs">{runId.slice(-12)}</Badge>
-            </Text>
-            <Text color="gray.600" fontSize="sm">
-              Target: {targetUrl}
-            </Text>
-          </Box>
-          <ButtonGroup size="sm">
-            <Button colorScheme="purple" onClick={() => navigate(`/admin/discovery/${runId}`)}>
-              View Discovery
-            </Button>
-            <Button colorScheme="blue" onClick={() => navigate(`/admin/tests/${runId}`)}>
-              View Tests
-            </Button>
-            <Button colorScheme="green" onClick={() => navigate(`/admin/results/${runId}`)}>
-              View Results
-            </Button>
-          </ButtonGroup>
-        </HStack>
-
-        {/* Status Banner */}
-        <Alert
-          status={status === "completed" ? "success" : "error"}
-          rounded="md"
-          variant="left-accent"
-        >
-          <AlertIcon />
-          <Box flex="1">
-            <AlertTitle>
-              {status === "completed" ? "✅ Run Completed Successfully" : "❌ Run Failed"}
-            </AlertTitle>
-            <AlertDescription fontSize="sm">
-              Duration: {durationMin} minutes | 
-              Started: {new Date(createdAt * 1000).toLocaleString()}
-              {completedAt && ` | Completed: ${new Date(completedAt * 1000).toLocaleString()}`}
-            </AlertDescription>
-          </Box>
-        </Alert>
-
-        {/* Scenario Used */}
-        {scenario && (
-          <Card>
-            <CardHeader pb="2">
-              <Heading size="sm">Scenario Used</Heading>
-            </CardHeader>
-            <CardBody>
-              <Text fontSize="sm" color="gray.700" whiteSpace="pre-wrap">
-                {scenario}
+    <Fade in={true}>
+      <Box p="6" maxW="1400px" mx="auto">
+        <VStack align="stretch" spacing="6">
+          {/* Header */}
+          <HStack justify="space-between" align="start" flexWrap="wrap">
+            <Box>
+              <Heading 
+                size="xl" 
+                mb="2"
+                bgGradient="linear(to-r, purple.600, pink.500)"
+                bgClip="text"
+              >
+                Test Run Report
+              </Heading>
+              <Text color="gray.600" fontSize="sm" mb="1">
+                Run ID: <Badge fontFamily="monospace" fontSize="xs" colorScheme="purple">{runId.slice(-12)}</Badge>
               </Text>
+              <Text color="gray.600" fontSize="sm">
+                Target: <Badge colorScheme="blue" fontSize="xs">{targetUrl}</Badge>
+              </Text>
+            </Box>
+            <ButtonGroup size="sm" flexWrap="wrap">
+              <Button colorScheme="purple" onClick={() => navigate(`/admin/discovery/${runId}`)}>
+               Discovery
+              </Button>
+              <Button colorScheme="blue" onClick={() => navigate(`/admin/tests/${runId}`)}>
+                Tests
+              </Button>
+              <Button 
+                colorScheme="green" 
+                onClick={() => navigate(`/admin/results/${runId}`)}
+                isDisabled={status !== "completed" && status !== "failed"}
+              >
+                 Results
+              </Button>
+            </ButtonGroup>
+          </HStack>
+
+          {/* Status Banner */}
+          <Alert
+            status={status === "completed" ? "success" : status === "failed" ? "error" : "info"}
+            rounded="xl"
+            variant="left-accent"
+            boxShadow="md"
+          >
+            <AlertIcon />
+            <Box flex="1">
+              <AlertTitle fontSize="lg" fontWeight="bold">
+                {status === "completed" ? "Run Completed Successfully" : 
+                 status === "failed" ? "Run Failed" : 
+                 "🔄 Run In Progress"}
+              </AlertTitle>
+              <AlertDescription fontSize="sm" mt="1">
+                <HStack spacing="4" flexWrap="wrap">
+                  <Text>
+                    <Icon as={MdAccessTime} mb="-1px" mr="1" />
+                    Duration: <strong>{durationMin} minutes</strong>
+                  </Text>
+                  <Text>
+                    Started: <strong>{createdAt ? new Date(createdAt).toLocaleString() : "N/A"}</strong>
+                  </Text>
+                  {completedAt && (
+                    <Text>
+                      Completed: <strong>{new Date(completedAt).toLocaleString()}</strong>
+                    </Text>
+                  )}
+                </HStack>
+              </AlertDescription>
+            </Box>
+          </Alert>
+
+          {/* Scenario Used */}
+          <Card boxShadow="md">
+            <CardBody>
+              <HStack>
+                <Icon as={MdSpeed} boxSize="5" color="purple.500" />
+                <Box>
+                  <Text fontSize="sm" fontWeight="semibold" color="gray.600">Scenario Used:</Text>
+                  <Badge colorScheme="purple" fontSize="md" px="3" py="1" mt="1">
+                    {scenarioName}
+                  </Badge>
+                </Box>
+              </HStack>
             </CardBody>
           </Card>
-        )}
 
-        {/* Summary Statistics */}
-        <Box>
-          <Heading size="md" mb="4">
-            Summary
-          </Heading>
-          <SimpleGrid columns={{ base: 2, md: 5 }} spacing="4">
-            <Card>
-              <CardBody>
-                <Stat>
-                  <StatLabel fontSize="xs">Pages</StatLabel>
-                  <StatNumber fontSize="2xl" color="blue.600">
-                    {discovery.ok ? discovery.pages?.length || 0 : "N/A"}
-                  </StatNumber>
-                  <StatHelpText fontSize="xs">Discovered</StatHelpText>
-                </Stat>
-              </CardBody>
-            </Card>
+          {/* Summary Statistics */}
+          <Box>
+            <Heading size="md" mb="4" color="gray.700">
+               <Icon as={MdReport} mb="-1px" mr="1" /> Summary
+            </Heading>
+            <SimpleGrid columns={{ base: 2, md: 5 }} spacing="4">
+              {/* Pages */}
+              <Card boxShadow="lg" _hover={{ transform: "translateY(-4px)", transition: "all 0.2s" }}>
+                <CardBody>
+                  <Stat>
+                    <StatLabel fontSize="xs" color="gray.600">Pages</StatLabel>
+                    <StatNumber 
+                      fontSize="2xl" 
+                      color={
+                        parseFloat(passRate) >= 80 ? "green.600" : 
+                        parseFloat(passRate) >= 50 ? "orange.600" : 
+                        parseFloat(passRate) > 0 ? "red.600" : 
+                        "gray.600"
+                      }
+                    >
+                      {passRate}%
+                    </StatNumber>
+                                        <StatHelpText fontSize="xs">Discovered</StatHelpText>
+                  </Stat>
+                </CardBody>
+              </Card>
 
-            <Card>
-              <CardBody>
-                <Stat>
-                  <StatLabel fontSize="xs">Elements</StatLabel>
-                  <StatNumber fontSize="2xl" color="green.600">
-                    {discovery.ok
-                      ? discovery.pages?.reduce((sum, p) => sum + (p.selectors?.length || 0), 0) || 0
-                      : "N/A"}
-                  </StatNumber>
-                  <StatHelpText fontSize="xs">Found</StatHelpText>
-                </Stat>
-              </CardBody>
-            </Card>
+              {/* Elements */}
+              <Card boxShadow="lg" _hover={{ transform: "translateY(-4px)", transition: "all 0.2s" }}>
+                <CardBody>
+                  <Stat>
+                    <StatLabel fontSize="xs" color="gray.600">Elements</StatLabel>
+                    <StatNumber fontSize="3xl" color="green.600" fontWeight="bold">
+                      {elementsCount}
+                    </StatNumber>
+                    <StatHelpText fontSize="xs">Found</StatHelpText>
+                  </Stat>
+                </CardBody>
+              </Card>
 
-            <Card>
-              <CardBody>
-                <Stat>
-                  <StatLabel fontSize="xs">Tests</StatLabel>
-                  <StatNumber fontSize="2xl" color="purple.600">
-                    {tests.ok ? tests.count || 0 : "N/A"}
-                  </StatNumber>
-                  <StatHelpText fontSize="xs">Generated</StatHelpText>
-                </Stat>
-              </CardBody>
-            </Card>
+              {/* Tests */}
+              <Card boxShadow="lg" _hover={{ transform: "translateY(-4px)", transition: "all 0.2s" }}>
+                <CardBody>
+                  <Stat>
+                    <StatLabel fontSize="xs" color="gray.600">Tests</StatLabel>
+                    <StatNumber fontSize="3xl" color="purple.600" fontWeight="bold">
+                      {testsCount}
+                    </StatNumber>
+                    <StatHelpText fontSize="xs">Generated</StatHelpText>
+                  </Stat>
+                </CardBody>
+              </Card>
 
-            <Card>
-              <CardBody>
-                <Stat>
-                  <StatLabel fontSize="xs">Pass Rate</StatLabel>
-                  <StatNumber fontSize="2xl" color={passRate >= 80 ? "green.600" : passRate >= 50 ? "orange.600" : "red.600"}>
-                    {passRate}%
-                  </StatNumber>
-                  <StatHelpText fontSize="xs">
-                    {results.ok && results.summary ? `${results.summary.passed}/${results.summary.total}` : "N/A"}
-                  </StatHelpText>
-                </Stat>
-              </CardBody>
-            </Card>
+              {/* Pass Rate */}
+              <Card boxShadow="lg" _hover={{ transform: "translateY(-4px)", transition: "all 0.2s" }}>
+                <CardBody>
+                  <Stat>
+                    <StatLabel fontSize="xs" color="gray.600">Pass Rate</StatLabel>
+                    <StatNumber 
+                      fontSize="3xl" 
+                      color={getPassRateColor(passRate)}
+                      fontWeight="bold"
+                    >
+                      {passRate}%
+                    </StatNumber>
+                    <StatHelpText fontSize="xs">
+                      {passedTests}/{totalTests} passed
+                    </StatHelpText>
+                  </Stat>
+                </CardBody>
+              </Card>
 
-            <Card>
-              <CardBody>
-                <Stat>
-                  <StatLabel fontSize="xs">Duration</StatLabel>
-                  <StatNumber fontSize="2xl" color="blue.600">
-                    {durationMin}m
-                  </StatNumber>
-                  <StatHelpText fontSize="xs">Total Time</StatHelpText>
-                </Stat>
-              </CardBody>
-            </Card>
-          </SimpleGrid>
-        </Box>
+              {/* Duration */}
+              <Card boxShadow="lg" _hover={{ transform: "translateY(-4px)", transition: "all 0.2s" }}>
+                <CardBody>
+                  <Stat>
+                    <StatLabel fontSize="xs" color="gray.600">Duration</StatLabel>
+                    <StatNumber fontSize="3xl" color="blue.600" fontWeight="bold">
+                      {durationMin}m
+                    </StatNumber>
+                    <StatHelpText fontSize="xs">Total Time</StatHelpText>
+                  </Stat>
+                </CardBody>
+              </Card>
+            </SimpleGrid>
+          </Box>
 
-        <Divider />
+          <Divider />
 
-        {/* Stage-by-Stage Results */}
-        <Box>
-          <Heading size="md" mb="4">
-            Pipeline Stages
-          </Heading>
+          {/* Pipeline Status */}
+          <Box>
+            <Heading size="md" mb="4" color="gray.700">
+             <Icon as={MdRefresh} mb="-1px" mr="1" /> Pipeline Stages
+            </Heading>
+            <SimpleGrid columns={{ base: 2, md: 4 }} spacing="4">
+              {/* Discovery */}
+              <Card 
+                bg={discoveryOk ? "green.50" : "red.50"}
+                borderLeft="4px"
+                borderColor={discoveryOk ? "green.500" : "red.500"}
+                boxShadow="md"
+                _hover={{ transform: "translateY(-2px)", transition: "all 0.2s" }}
+              >
+                <CardBody>
+                  <HStack justify="space-between" mb="2">
+                    <Text fontWeight="bold" fontSize="md">Discovery</Text>
+                    <Icon 
+                      as={discoveryOk ? MdCheckCircle : MdCancel} 
+                      boxSize="6" 
+                      color={discoveryOk ? "green.500" : "red.500"} 
+                    />
+                  </HStack>
+                  <Text fontSize="sm" color="gray.700" fontWeight="medium">
+                    {pagesCount} pages found
+                  </Text>
+                  <Text fontSize="xs" color="gray.600" mt="1">
+                    {elementsCount} elements
+                  </Text>
+                </CardBody>
+              </Card>
 
-          <Tabs variant="enclosed" colorScheme="blue">
-            <TabList>
-              <Tab>
-                <HStack spacing="2">
-                  <Text>Discovery</Text>
-                  {discovery.ok ? (
-                    <Badge colorScheme="green" fontSize="xs">✓</Badge>
-                  ) : (
-                    <Badge colorScheme="red" fontSize="xs">✗</Badge>
-                  )}
-                </HStack>
-              </Tab>
-              <Tab>
-                <HStack spacing="2">
-                  <Text>Test Generation</Text>
-                  {tests.ok ? (
-                    <Badge colorScheme="green" fontSize="xs">✓</Badge>
-                  ) : (
-                    <Badge colorScheme="red" fontSize="xs">✗</Badge>
-                  )}
-                </HStack>
-              </Tab>
-              <Tab>
-                <HStack spacing="2">
-                  <Text>Execution</Text>
-                  {results.ok ? (
-                    <Badge colorScheme="green" fontSize="xs">✓</Badge>
-                  ) : (
-                    <Badge colorScheme="red" fontSize="xs">✗</Badge>
-                  )}
-                </HStack>
-              </Tab>
-              <Tab>
-                <HStack spacing="2">
-                  <Text>Healing</Text>
-                  {healing.ok ? (
-                    <Badge colorScheme="green" fontSize="xs">✓</Badge>
-                  ) : (
-                    <Badge colorScheme="gray" fontSize="xs">N/A</Badge>
-                  )}
-                </HStack>
-              </Tab>
-            </TabList>
+              {/* Test Generation */}
+              <Card 
+                bg={testsOk ? "green.50" : "red.50"}
+                borderLeft="4px"
+                borderColor={testsOk ? "green.500" : "red.500"}
+                boxShadow="md"
+                _hover={{ transform: "translateY(-2px)", transition: "all 0.2s" }}
+              >
+                <CardBody>
+                  <HStack justify="space-between" mb="2">
+                    <Text fontWeight="bold" fontSize="md">Generation</Text>
+                    <Icon 
+                      as={testsOk ? MdCheckCircle : MdCancel} 
+                      boxSize="6" 
+                      color={testsOk ? "green.500" : "red.500"} 
+                    />
+                  </HStack>
+                  <Text fontSize="sm" color="gray.700" fontWeight="medium">
+                    {testsCount} tests created
+                  </Text>
+                  <Text fontSize="xs" color="gray.600" mt="1">
+                    {testsData.metadata?.model || "stub"} model
+                  </Text>
+                </CardBody>
+              </Card>
 
-            <TabPanels>
-              {/* Discovery Tab */}
-              <TabPanel>
-                <VStack align="stretch" spacing="3">
-                  {discovery.ok ? (
-                    <>
-                      <SimpleGrid columns={3} spacing="4">
-                        <Stat>
-                          <StatLabel>Pages Discovered</StatLabel>
-                          <StatNumber>{discovery.pages?.length || 0}</StatNumber>
-                        </Stat>
-                        <Stat>
-                          <StatLabel>Total Elements</StatLabel>
-                          <StatNumber>
-                            {discovery.pages?.reduce((sum, p) => sum + (p.selectors?.length || 0), 0) || 0}
-                          </StatNumber>
-                        </Stat>
-                        <Stat>
-                          <StatLabel>Discovery Time</StatLabel>
-                          <StatNumber>
-                            {discovery.metadata?.end && discovery.metadata?.start
-                              ? ((discovery.metadata.end - discovery.metadata.start).toFixed(2) + "s")
-                              : "N/A"}
-                          </StatNumber>
-                        </Stat>
-                      </SimpleGrid>
-                      <Button
-                        size="sm"
-                        colorScheme="purple"
-                        onClick={() => navigate(`/admin/discovery/${runId}`)}
-                      >
-                        View Full Discovery Results →
-                      </Button>
-                    </>
-                  ) : (
-                    <Alert status="warning">
-                      <AlertIcon />
-                      Discovery stage not completed or failed
-                    </Alert>
-                  )}
-                </VStack>
-              </TabPanel>
+              {/* Execution */}
+              <Card 
+                bg={resultsOk ? "green.50" : "red.50"}
+                borderLeft="4px"
+                borderColor={resultsOk ? "green.500" : "red.500"}
+                boxShadow="md"
+                _hover={{ transform: "translateY(-2px)", transition: "all 0.2s" }}
+              >
+                <CardBody>
+                  <HStack justify="space-between" mb="2">
+                    <Text fontWeight="bold" fontSize="md">Execution</Text>
+                    <Icon 
+                      as={resultsOk ? MdCheckCircle : MdCancel} 
+                      boxSize="6" 
+                      color={resultsOk ? "green.500" : "red.500"} 
+                    />
+                  </HStack>
+                  <Text fontSize="sm" color="gray.700" fontWeight="medium">
+                    {passedTests}/{totalTests} passed
+                  </Text>
+                  <Text fontSize="xs" color="gray.600" mt="1">
+                    Exit code: {exitCode}
+                  </Text>
+                </CardBody>
+              </Card>
 
-              {/* Test Generation Tab */}
-              <TabPanel>
-                <VStack align="stretch" spacing="3">
-                  {tests.ok ? (
-                    <>
-                      <SimpleGrid columns={3} spacing="4">
-                        <Stat>
-                          <StatLabel>Test Files</StatLabel>
-                          <StatNumber>{tests.count || 0}</StatNumber>
-                        </Stat>
-                        <Stat>
-                          <StatLabel>Total Lines</StatLabel>
-                          <StatNumber>
-                            {tests.tests?.reduce((sum, t) => sum + (t.lines || 0), 0) || 0}
-                          </StatNumber>
-                        </Stat>
-                        <Stat>
-                          <StatLabel>Generation Method</StatLabel>
-                          <StatNumber fontSize="md">
-                            {tests.metadata?.model === "stub" ? "Stub" : "AI"}
-                          </StatNumber>
-                        </Stat>
-                      </SimpleGrid>
-                      {tests.metadata?.seed && (
-                        <Box bg="blue.50" p="3" rounded="md">
-                          <Text fontSize="xs" fontWeight="semibold" mb="1">Scenario:</Text>
-                          <Text fontSize="sm">{tests.metadata.seed}</Text>
-                        </Box>
-                      )}
-                      <Button
-                        size="sm"
-                        colorScheme="blue"
-                        onClick={() => navigate(`/admin/tests/${runId}`)}
-                      >
-                        View Generated Tests →
-                      </Button>
-                    </>
-                  ) : (
-                    <Alert status="warning">
-                      <AlertIcon />
-                      Test generation stage not completed or failed
-                    </Alert>
-                  )}
-                </VStack>
-              </TabPanel>
+              {/* Healing */}
+              <Card 
+                bg="gray.50"
+                borderLeft="4px"
+                borderColor="gray.400"
+                boxShadow="md"
+                _hover={{ transform: "translateY(-2px)", transition: "all 0.2s" }}
+              >
+                <CardBody>
+                  <HStack justify="space-between" mb="2">
+                    <Text fontWeight="bold" fontSize="md">Healing</Text>
+                    <Badge colorScheme="gray" fontSize="sm">
+                      N/A
+                    </Badge>
+                  </HStack>
+                  <Text fontSize="sm" color="gray.700" fontWeight="medium">
+                    {healingOk ? "Available" : "Not needed"}
+                  </Text>
+                  <Text fontSize="xs" color="gray.600" mt="1">
+                    Self-healing
+                  </Text>
+                </CardBody>
+              </Card>
+            </SimpleGrid>
+          </Box>
 
-              {/* Execution Tab */}
-              <TabPanel>
-                <VStack align="stretch" spacing="3">
-                  {results.ok ? (
-                    <>
-                      <SimpleGrid columns={4} spacing="4">
-                        <Stat>
-                          <StatLabel>Total Tests</StatLabel>
-                          <StatNumber>{results.summary?.total || 0}</StatNumber>
-                        </Stat>
-                        <Stat>
-                          <StatLabel>Passed</StatLabel>
-                          <StatNumber color="green.600">{results.summary?.passed || 0}</StatNumber>
-                        </Stat>
-                        <Stat>
-                          <StatLabel>Failed</StatLabel>
-                          <StatNumber color="red.600">{results.summary?.failed || 0}</StatNumber>
-                        </Stat>
-                        <Stat>
-                          <StatLabel>Duration</StatLabel>
-                          <StatNumber>{(results.summary?.duration || 0).toFixed(2)}s</StatNumber>
-                        </Stat>
-                      </SimpleGrid>
-                      <Alert status={results.exitCode === 0 ? "success" : "error"}>
-                        <AlertIcon />
-                        <Box>
-                          <AlertTitle>Exit Code: {results.exitCode}</AlertTitle>
-                          <AlertDescription>
-                            {results.exitCode === 0 ? "All tests passed successfully" : "Some tests failed"}
-                          </AlertDescription>
-                        </Box>
-                      </Alert>
-                      <Button
-                        size="sm"
-                        colorScheme="green"
-                        onClick={() => navigate(`/admin/results/${runId}`)}
-                      >
-                        View Detailed Results →
-                      </Button>
-                    </>
-                  ) : (
-                    <Alert status="warning">
-                      <AlertIcon />
-                      Test execution not completed or failed
-                    </Alert>
-                  )}
-                </VStack>
-              </TabPanel>
-
-              {/* Healing Tab */}
-              <TabPanel>
-                <VStack align="stretch" spacing="3">
-                  {healing.ok ? (
-                    <>
-                      <Alert status="info">
-                        <AlertIcon />
-                        <Box>
-                          <AlertTitle>Auto-Healing Suggestions Available</AlertTitle>
-                          <AlertDescription>
-                            {healing.suggestions?.length || 0} healing suggestions generated by {healing.fromModel}
-                          </AlertDescription>
-                        </Box>
-                      </Alert>
-                      <SimpleGrid columns={2} spacing="4">
-                        <Stat>
-                          <StatLabel>Suggestions</StatLabel>
-                          <StatNumber>{healing.suggestions?.length || 0}</StatNumber>
-                        </Stat>
-                        <Stat>
-                          <StatLabel>Model Used</StatLabel>
-                          <StatNumber fontSize="md">{healing.fromModel || "N/A"}</StatNumber>
-                        </Stat>
-                      </SimpleGrid>
-                    </>
-                  ) : (
-                    <Alert status="info">
-                      <AlertIcon />
-                      No healing required - all tests passed or healing not triggered
-                    </Alert>
-                  )}
-                </VStack>
-              </TabPanel>
-            </TabPanels>
-          </Tabs>
-        </Box>
-
-        {/* Action Buttons */}
-        <Divider />
-        <HStack justify="center" spacing="4">
-          <Button
-            colorScheme="blue"
-            size="lg"
-            onClick={() => navigate("/admin/runs")}
-          >
-            Back to Dashboard
-          </Button>
-          <Button
-            colorScheme="green"
-            size="lg"
-            variant="outline"
-            onClick={() => window.print()}
-          >
-            Print Report
-          </Button>
-        </HStack>
-      </VStack>
-    </Box>
+          {/* Action Buttons */}
+          <Divider />
+          <HStack justify="center" spacing="4" pt="4">
+            <Button
+              size="lg"
+              colorScheme="purple"
+              onClick={() => navigate("/admin/runs")}
+              px="8"
+            >
+              ← Back to Dashboard
+            </Button>
+            <Button
+              size="lg"
+              colorScheme="green"
+              variant="outline"
+              onClick={() => window.print()}
+              px="8"
+            >
+              🖨️ Print Report
+            </Button>
+          </HStack>
+        </VStack>
+      </Box>
+    </Fade>
   );
 }
