@@ -1,10 +1,12 @@
+// ui/src/views/agentic/RunsDashboard.jsx
 import React, { useEffect, useRef, useState } from "react";
 import {
   Box, Heading, Table, Thead, Tbody, Tr, Th, Td, Button, Badge, 
   Text, Spinner, ButtonGroup, Menu, MenuButton, MenuList, MenuItem,
-  Alert, AlertIcon,
+  Alert, AlertIcon, Icon, Tooltip, HStack,
 } from "@chakra-ui/react";
 import { ChevronDownIcon } from "@chakra-ui/icons";
+import { MdAutoFixHigh, MdCheckCircle, MdCancel } from "react-icons/md";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 
@@ -39,7 +41,7 @@ export default function RunsDashboard() {
     }
     
     load();
-    const iv = setInterval(load, 5000); // Refresh every 5 seconds
+    const iv = setInterval(load, 10000); // Refresh every 5 seconds
     
     return () => { 
       mounted = false; 
@@ -77,7 +79,7 @@ export default function RunsDashboard() {
         if (obj && obj.line) {
           setLogs(prev => {
             const next = [...prev, obj.line];
-            return next.slice(-500); // Keep last 500 lines
+            return next.slice(-500);
           });
         } else {
           setLogs(prev => [...prev, String(ev.data)]);
@@ -86,7 +88,6 @@ export default function RunsDashboard() {
         setLogs(prev => [...prev, ev.data]);
       }
       
-      // Auto-scroll to bottom
       setTimeout(() => {
         const el = logsBoxRef.current;
         if (el) el.scrollTop = el.scrollHeight;
@@ -101,7 +102,7 @@ export default function RunsDashboard() {
   }
 
   function streamLogs(runId) {
-    setLogs([`📡 Connecting to logs for ${runId.slice(-12)}...`]);
+    setLogs([` Connecting to logs for ${runId.slice(-12)}...`]);
     setTailingRun(runId);
     openEventSource(runId);
   }
@@ -118,12 +119,38 @@ export default function RunsDashboard() {
 
   const isCompleted = (status) => status === "completed" || status === "failed";
 
+  // NEW: Get healing status icon
+  function getHealingBadge(run) {
+    if (!run.phase || run.phase !== "completed") {
+      return <Badge fontSize="xs" colorScheme="gray">-</Badge>;
+    }
+    
+    // Check if healing was used (would be in run data from backend)
+    // For now, show placeholder
+    return (
+      <Tooltip label="Auto-healing status" hasArrow>
+        <Badge fontSize="xs" colorScheme="blue" cursor="pointer">
+          <Icon as={MdAutoFixHigh} mb="-1px" mr="1" />
+          Available
+        </Badge>
+      </Tooltip>
+    );
+  }
+
   return (
     <Box>
       <Heading size="lg" mb="2">Test Runs Dashboard</Heading>
-      <Text color="gray.600" mb="6" fontSize="sm">
+      <Text color="gray.600" mb="2" fontSize="sm">
         Monitor and manage all test executions
       </Text>
+      
+      {/* NEW: Enhanced Features Badge */}
+      <HStack mb="6" spacing="2">
+        <Badge colorScheme="green" fontSize="xs">Enhanced Discovery</Badge>
+        <Badge colorScheme="blue" fontSize="xs">Auto-Healing</Badge>
+        <Badge colorScheme="purple" fontSize="xs">PostgreSQL Storage</Badge>
+        <Badge colorScheme="orange" fontSize="xs">Better Reporting</Badge>
+      </HStack>
 
       {/* Runs Table */}
       <Box mb="6" p="4" bg="white" rounded="md" shadow="sm">
@@ -146,8 +173,11 @@ export default function RunsDashboard() {
                 <Th width="140px">Run ID</Th>
                 <Th>Target URL</Th>
                 <Th width="100px">Status</Th>
+                 <Th width="100px">Mode</Th>
+                 <Th width="100px">Preset</Th>
+                <Th width="100px">Healing</Th> {/* NEW COLUMN */}
                 <Th width="140px">Created</Th>
-                <Th width="280px">Actions</Th>
+                <Th width="320px">Actions</Th>
               </Tr>
             </Thead>
             <Tbody>
@@ -164,6 +194,17 @@ export default function RunsDashboard() {
                       {r.status}
                     </Badge>
                   </Td>
+                  <Td>
+                    <Badge  fontSize="xs">
+                      {r.mode}
+                    </Badge>
+                  </Td>
+                  <Td>
+                    <Badge  fontSize="xs">
+                      {r.preset}
+                    </Badge>
+                  </Td>
+                  <Td>{getHealingBadge(r)}</Td> {/* NEW CELL */}
                   <Td fontSize="xs" color="gray.600">
                     {r.createdAt ? new Date(r.createdAt).toLocaleTimeString() : "N/A"}
                   </Td>
@@ -173,7 +214,7 @@ export default function RunsDashboard() {
                         onClick={() => streamLogs(r.runId)}
                         colorScheme={tailingRun === r.runId ? "green" : "gray"}
                       >
-                        {tailingRun === r.runId ? "📡 Live" : "Logs"}
+                        {tailingRun === r.runId ? " Live" : "Logs"}
                       </Button>
                       
                       <Menu>
@@ -187,17 +228,26 @@ export default function RunsDashboard() {
                         </MenuButton>
                         <MenuList fontSize="sm">
                           <MenuItem onClick={() => navigate(`/admin/discovery/${r.runId}`)}>
-                            🔍 Discovery
+                             Discovery
                           </MenuItem>
                           <MenuItem onClick={() => navigate(`/admin/tests/${r.runId}`)}>
-                            📝 Tests
+                             Tests
                           </MenuItem>
                           <MenuItem 
                             onClick={() => navigate(`/admin/results/${r.runId}`)}
                             isDisabled={!isCompleted(r.status)}
                           >
-                            ✅ Results
+                             Results
                           </MenuItem>
+                          <MenuItem 
+                            onClick={() => navigate(`/admin/healing/${r.runId}`)}
+                            isDisabled={!isCompleted(r.status)}
+                          >
+                             Healing
+                          </MenuItem>
+                          <MenuItem onClick={() => navigate(`/admin/failures/${r.runId}`)}>
+                           Failures & Screenshots
+                        </MenuItem>
                         </MenuList>
                       </Menu>
 
@@ -214,7 +264,7 @@ export default function RunsDashboard() {
               ))}
               {runs.length === 0 && !loadingRuns && (
                 <Tr>
-                  <Td colSpan={5} textAlign="center" color="gray.500" py="8">
+                  <Td colSpan={6} textAlign="center" color="gray.500" py="8">
                     <Text fontSize="md" mb="2">No test runs yet</Text>
                     <Button 
                       size="sm" 

@@ -28,13 +28,14 @@ import {
   Button,
   useClipboard,
 } from "@chakra-ui/react";
-import { useParams } from "react-router-dom";
+import { useParams,useNavigate } from "react-router-dom";
 import axios from "axios";
 
 const API = process.env.REACT_APP_API_BASE || "http://localhost:8000";
 
 export default function TestsView() {
   const { runId } = useParams();
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [testsData, setTestsData] = useState(null);
@@ -102,6 +103,7 @@ export default function TestsView() {
     <Box p="6">
       <VStack align="stretch" spacing="6">
         {/* Header */}
+        <HStack justify="space-between" align="start">
         <Box>
           <Heading size="lg" mb="2">
             Generated Tests
@@ -110,7 +112,10 @@ export default function TestsView() {
             AI-generated test cases ready for execution
           </Text>
         </Box>
-
+         <Button size="sm" onClick={() => navigate("/admin/runs")}>
+                              Back to Dashboard
+                            </Button>
+         </HStack>
         {/* Summary Stats */}
         <SimpleGrid columns={{ base: 1, md: 3 }} spacing="4">
           <Card>

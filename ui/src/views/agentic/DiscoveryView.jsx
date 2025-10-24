@@ -31,14 +31,16 @@ import {
   StatNumber,
   StatGroup,
   SimpleGrid,
+  Button
 } from "@chakra-ui/react";
-import { useParams } from "react-router-dom";
+import { useParams,useNavigate } from "react-router-dom";
 import axios from "axios";
 
 const API = process.env.REACT_APP_API_BASE || "http://localhost:8000";
 
 export default function DiscoveryView() {
   const { runId } = useParams();
+  const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [discoveryData, setDiscoveryData] = useState(null);
@@ -106,17 +108,27 @@ export default function DiscoveryView() {
 
   return (
     <Box p="6">
+      
       <VStack align="stretch" spacing="6">
         {/* Header */}
+        <HStack justify="space-between" align="start">
         <Box>
+
+           
           <Heading size="lg" mb="2">
-            Discovery Results
+            Discovery Results 
           </Heading>
+          
           <Text color="gray.600">
             Pages discovered and elements found during crawl
           </Text>
+          
+         
         </Box>
-
+        <Button size="sm" onClick={() => navigate("/admin/runs")}>
+                      Back to Dashboard
+                    </Button>
+ </HStack>
         {/* Summary Stats */}
         <SimpleGrid columns={{ base: 1, md: 3 }} spacing="4">
           <Card>

@@ -25,7 +25,7 @@ import {
   Icon,
 } from "@chakra-ui/react";
 import { useParams, useNavigate } from "react-router-dom";
-import { MdCheckCircle, MdCancel, MdAccessTime, MdSpeed,MdReport,MdRefresh } from "react-icons/md";
+import { MdCheckCircle, MdCancel, MdAccessTime, MdSpeed, MdReport, MdRefresh, MdVideocam, MdVisibility } from "react-icons/md";
 import axios from "axios";
 
 const API = process.env.REACT_APP_API_BASE || "http://localhost:8000";
@@ -36,11 +36,13 @@ export default function ReportView() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [runData, setRunData] = useState(null);
+  const [isRecorder, setIsRecorder] = useState(false);
+  const [isHeaded, setIsHeaded] = useState(false);
 
   useEffect(() => {
     loadReport();
   }, [runId]);
-
+ 
   async function loadReport() {
     setLoading(true);
     setError(null);
@@ -51,6 +53,20 @@ export default function ReportView() {
       
       if (res.data && res.data.runId) {
         setRunData(res.data);
+        
+        // ← DETECT RECORDER MODE
+        const isRecorderMode = 
+          res.data.tests?.mode === "recorder" ||
+          res.data.discovery?.stats?.mode === "recorder" ||
+          res.data.config?.useRecorder === true;
+        
+        console.log("Recorder mode detected:", isRecorderMode);
+        setIsRecorder(isRecorderMode);
+        
+        // ← DETECT HEADED MODE
+        const headedMode = res.data.config?.mode === "headed" || isRecorderMode;
+        console.log("Headed mode detected:", headedMode);
+        setIsHeaded(headedMode);
       } else {
         setError("Run data not available");
       }
@@ -127,7 +143,7 @@ export default function ReportView() {
   const discoveryPages = runData.discovery?.pages || [];
   const pagesCount = discoveryPages.length;
   const elementsCount = discoveryPages.reduce((sum, p) => sum + (p.selectors?.length || 0), 0);
-  const discoveryOk = pagesCount > 0;
+  const discoveryOk = pagesCount > 0 || isRecorder; // ← OK if recorder mode
 
   // Extract tests data
   const testsData = runData.tests || {};
@@ -216,6 +232,16 @@ export default function ReportView() {
               <Button colorScheme="blue" onClick={() => navigate(`/admin/tests/${runId}`)}>
                 Tests
               </Button>
+              <Button colorScheme="pink" onClick={() => navigate(`/admin/healing/${runId}`)}>
+                Healing
+              </Button>
+              <Button 
+                colorScheme="red" 
+                onClick={() => navigate(`/admin/failures/${runId}`)}
+                isDisabled={status == "completed" && status == "failed"}
+              >
+                 Test Failures with Screenshots
+              </Button>
               <Button 
                 colorScheme="green" 
                 onClick={() => navigate(`/admin/results/${runId}`)}
@@ -229,44 +255,72 @@ export default function ReportView() {
           {/* Status Banner */}
           <Alert
             status={status === "completed" ? "success" : status === "failed" ? "error" : "info"}
-            rounded="xl"
-            variant="left-accent"
-            boxShadow="md"
+            rounded="lg"
+            boxShadow="lg"
           >
             <AlertIcon />
             <Box flex="1">
               <AlertTitle fontSize="lg" fontWeight="bold">
-                {status === "completed" ? "Run Completed Successfully" : 
-                 status === "failed" ? "Run Failed" : 
-                 "🔄 Run In Progress"}
+                Status: {status.toUpperCase()}
               </AlertTitle>
-              <AlertDescription fontSize="sm" mt="1">
-                <HStack spacing="4" flexWrap="wrap">
-                  <Text>
-                    <Icon as={MdAccessTime} mb="-1px" mr="1" />
-                    Duration: <strong>{durationMin} minutes</strong>
-                  </Text>
-                  <Text>
-                    Started: <strong>{createdAt ? new Date(createdAt).toLocaleString() : "N/A"}</strong>
-                  </Text>
-                  {completedAt && (
-                    <Text>
-                      Completed: <strong>{new Date(completedAt).toLocaleString()}</strong>
-                    </Text>
-                  )}
-                </HStack>
+              <AlertDescription fontSize="sm">
+                Run {status === "completed" ? "completed successfully" : status === "failed" ? "encountered errors" : "in progress"}
+                {completedAt && ` at ${new Date(completedAt).toLocaleString()}`}
               </AlertDescription>
             </Box>
+            {/* ← ADD MODE BADGES */}
+            <VStack align="end" spacing="1">
+              {isRecorder && (
+                <Badge colorScheme="purple" fontSize="md" px="3" py="1">
+                  <Icon as={MdVideocam} mr="1" />
+                  RECORDER
+                </Badge>
+              )}
+              {isHeaded && (
+                <Badge colorScheme="cyan" fontSize="md" px="3" py="1">
+                  <Icon as={MdVisibility} mr="1" />
+                  HEADED
+                </Badge>
+              )}
+            </VStack>
           </Alert>
 
-          {/* Scenario Used */}
-          <Card boxShadow="md">
+          {/* ← ADD RECORDER ALERT */}
+          {isRecorder && (
+            <Alert status="info" rounded="lg" variant="left-accent" borderLeftWidth="4px">
+              <AlertIcon />
+              <Box>
+                <Text fontWeight="bold" fontSize="md">
+                  🎥 Visual Test Recorder Mode
+                </Text>
+                <Text fontSize="sm" color="gray.600" mt="1">
+                  This test was created manually using the Visual Test Recorder.
+                  Discovery and AI generation were skipped. Test ran in visible browser mode.
+                </Text>
+              </Box>
+            </Alert>
+          )}
+
+          {/* Run Configuration */}
+          <Card boxShadow="lg">
             <CardBody>
-              <HStack>
-                <Icon as={MdSpeed} boxSize="5" color="purple.500" />
+              <Heading size="sm" mb="3" color="gray.700">Run Configuration</Heading>
+              <HStack spacing="6" flexWrap="wrap">
                 <Box>
-                  <Text fontSize="sm" fontWeight="semibold" color="gray.600">Scenario Used:</Text>
-                  <Badge colorScheme="purple" fontSize="md" px="3" py="1" mt="1">
+                  <Text fontSize="xs" color="gray.500">Test Mode</Text>
+                  <Badge colorScheme="blue" fontSize="sm" mt="1">
+                    {isRecorder ? "MANUAL RECORDING" : "AI GENERATED"}
+                  </Badge>
+                </Box>
+                <Box>
+                  <Text fontSize="xs" color="gray.500">Browser Mode</Text>
+                  <Badge colorScheme={isHeaded ? "cyan" : "gray"} fontSize="sm" mt="1">
+                    {isHeaded ? "HEADED (Visible)" : "HEADLESS"}
+                  </Badge>
+                </Box>
+                <Box>
+                  <Text fontSize="xs" color="gray.500">Scenario</Text>
+                  <Badge colorScheme="purple" fontSize="sm" mt="1">
                     {scenarioName}
                   </Badge>
                 </Box>
@@ -287,16 +341,14 @@ export default function ReportView() {
                     <StatLabel fontSize="xs" color="gray.600">Pages</StatLabel>
                     <StatNumber 
                       fontSize="2xl" 
-                      color={
-                        parseFloat(passRate) >= 80 ? "green.600" : 
-                        parseFloat(passRate) >= 50 ? "orange.600" : 
-                        parseFloat(passRate) > 0 ? "red.600" : 
-                        "gray.600"
-                      }
+                      color="blue.600"
+                      fontWeight="bold"
                     >
-                      {passRate}%
+                      {pagesCount}
                     </StatNumber>
-                                        <StatHelpText fontSize="xs">Discovered</StatHelpText>
+                    <StatHelpText fontSize="xs">
+                      {isRecorder ? "Manual Test" : "Discovered"}
+                    </StatHelpText>
                   </Stat>
                 </CardBody>
               </Card>
@@ -309,7 +361,9 @@ export default function ReportView() {
                     <StatNumber fontSize="3xl" color="green.600" fontWeight="bold">
                       {elementsCount}
                     </StatNumber>
-                    <StatHelpText fontSize="xs">Found</StatHelpText>
+                    <StatHelpText fontSize="xs">
+                      {isRecorder ? "N/A" : "Found"}
+                    </StatHelpText>
                   </Stat>
                 </CardBody>
               </Card>
@@ -322,7 +376,9 @@ export default function ReportView() {
                     <StatNumber fontSize="3xl" color="purple.600" fontWeight="bold">
                       {testsCount}
                     </StatNumber>
-                    <StatHelpText fontSize="xs">Generated</StatHelpText>
+                    <StatHelpText fontSize="xs">
+                      {isRecorder ? "Recorded" : "Generated"}
+                    </StatHelpText>
                   </Stat>
                 </CardBody>
               </Card>
@@ -371,52 +427,60 @@ export default function ReportView() {
             <SimpleGrid columns={{ base: 2, md: 4 }} spacing="4">
               {/* Discovery */}
               <Card 
-                bg={discoveryOk ? "green.50" : "red.50"}
+                bg={isRecorder ? "purple.50" : discoveryOk ? "green.50" : "red.50"}
                 borderLeft="4px"
-                borderColor={discoveryOk ? "green.500" : "red.500"}
+                borderColor={isRecorder ? "purple.500" : discoveryOk ? "green.500" : "red.500"}
                 boxShadow="md"
                 _hover={{ transform: "translateY(-2px)", transition: "all 0.2s" }}
               >
                 <CardBody>
                   <HStack justify="space-between" mb="2">
                     <Text fontWeight="bold" fontSize="md">Discovery</Text>
-                    <Icon 
-                      as={discoveryOk ? MdCheckCircle : MdCancel} 
-                      boxSize="6" 
-                      color={discoveryOk ? "green.500" : "red.500"} 
-                    />
+                    {isRecorder ? (
+                      <Badge colorScheme="purple" fontSize="xs">SKIPPED</Badge>
+                    ) : (
+                      <Icon 
+                        as={discoveryOk ? MdCheckCircle : MdCancel} 
+                        boxSize="6" 
+                        color={discoveryOk ? "green.500" : "red.500"} 
+                      />
+                    )}
                   </HStack>
                   <Text fontSize="sm" color="gray.700" fontWeight="medium">
-                    {pagesCount} pages found
+                    {isRecorder ? "Manual Recording" : `${pagesCount} pages found`}
                   </Text>
                   <Text fontSize="xs" color="gray.600" mt="1">
-                    {elementsCount} elements
+                    {isRecorder ? "Recorder mode" : `${elementsCount} elements`}
                   </Text>
                 </CardBody>
               </Card>
 
               {/* Test Generation */}
               <Card 
-                bg={testsOk ? "green.50" : "red.50"}
+                bg={isRecorder ? "purple.50" : testsOk ? "green.50" : "red.50"}
                 borderLeft="4px"
-                borderColor={testsOk ? "green.500" : "red.500"}
+                borderColor={isRecorder ? "purple.500" : testsOk ? "green.500" : "red.500"}
                 boxShadow="md"
                 _hover={{ transform: "translateY(-2px)", transition: "all 0.2s" }}
               >
                 <CardBody>
                   <HStack justify="space-between" mb="2">
                     <Text fontWeight="bold" fontSize="md">Generation</Text>
-                    <Icon 
-                      as={testsOk ? MdCheckCircle : MdCancel} 
-                      boxSize="6" 
-                      color={testsOk ? "green.500" : "red.500"} 
-                    />
+                    {isRecorder ? (
+                      <Badge colorScheme="purple" fontSize="xs">SKIPPED</Badge>
+                    ) : (
+                      <Icon 
+                        as={testsOk ? MdCheckCircle : MdCancel} 
+                        boxSize="6" 
+                        color={testsOk ? "green.500" : "red.500"} 
+                      />
+                    )}
                   </HStack>
                   <Text fontSize="sm" color="gray.700" fontWeight="medium">
-                    {testsCount} tests created
+                    {isRecorder ? "User recorded" : `${testsCount} tests created`}
                   </Text>
                   <Text fontSize="xs" color="gray.600" mt="1">
-                    {testsData.metadata?.model || "stub"} model
+                    {isRecorder ? "Manual test" : `${testsData.metadata?.model || "stub"} model`}
                   </Text>
                 </CardBody>
               </Card>
@@ -442,7 +506,7 @@ export default function ReportView() {
                     {passedTests}/{totalTests} passed
                   </Text>
                   <Text fontSize="xs" color="gray.600" mt="1">
-                    Exit code: {exitCode}
+                    {isHeaded ? "Visible browser" : `Exit code: ${exitCode}`}
                   </Text>
                 </CardBody>
               </Card>

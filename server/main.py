@@ -20,7 +20,6 @@ from datetime import datetime
 import threading
 import json
 
-
 # Enhanced imports
 from src.tools.discovery_enhanced import discover_with_selectors
 from src.tools.generator import generate_tests, SCENARIO_TEMPLATES
@@ -29,7 +28,8 @@ from src.tools.auto_healer import auto_heal_and_rerun
 from src.database.connection import get_db, get_db_session, init_db
 from src.database.models import Run, RunLog
 from src.tools.progress_tracker import progress_tracker
-
+from src.tools.recorder import launch_codegen_recorder
+from pathlib import Path
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
@@ -87,7 +87,45 @@ def run_pipeline_sync(run_id: str, config: dict):
     with get_db() as db:
         try:
             url = config["url"]
+            use_recorder = config.get("useRecorder", False)
             add_log_to_db(db, run_id, f"🚀 Starting pipeline for {url}")
+            # If recorder mode, launch interactive browser FIRST
+            if use_recorder:
+                asyncio.run(progress_tracker.broadcast_progress(
+                    run_id,
+                    progress_tracker.update_phase(
+                        run_id, "starting", "running",
+                        "🎥 Launching Interactive Recorder...", 5
+                    )
+                ))
+                
+                add_log_to_db(db, run_id, "🎥 Launching Interactive Recorder...")
+                add_log_to_db(db, run_id, "👉 Browser will open - perform your test actions")
+                
+                from src.tools.recorder import launch_codegen_recorder
+                from src.tools.runner import get_run_dir
+                
+                recorder_result = launch_codegen_recorder(
+                    run_id=run_id,
+                    url=url,
+                    output_dir=get_run_dir(run_id) / "recorded"
+                )
+                
+                if recorder_result.get("ok"):
+                    recorded_file = recorder_result.get("output_file")
+                    add_log_to_db(db, run_id, f"✅ Recording saved: {recorded_file}")
+                    
+                    # Update progress
+                    asyncio.run(progress_tracker.broadcast_progress(
+                        run_id,
+                        progress_tracker.update_phase(
+                            run_id, "starting", "completed",
+                            "Recording complete!", 10
+                        )
+                    ))
+                else:
+                    error = recorder_result.get("message", "Unknown error")
+                    add_log_to_db(db, run_id, f"⚠️ Recording issue: {error}")
             
             run = db.query(Run).filter(Run.id == run_id).first()
             if run:
@@ -143,10 +181,15 @@ def run_pipeline_sync(run_id: str, config: dict):
             add_log_to_db(db, run_id, "🧪 Phase 3: Executing tests...")
             tests_dir = get_run_dir(run_id) / "generator" / "tests"
             
+            headed_mode = config.get("mode") == "headed" or config.get("useRecorder", False)
+
+            if config.get("useRecorder"):
+                add_log_to_db(db, run_id, "🎥 Running tests in VISIBLE mode (Recorder)")
+
             run_result = run_playwright_tests(
                 run_id=run_id,
                 gen_dir=str(tests_dir),
-                headed=config["mode"] == "headed",
+                headed=headed_mode,  # ← USE THIS VARIABLE
                 timeout_seconds=preset_config["timeout"]
             )
             
@@ -243,6 +286,8 @@ def list_runs(limit: int = 50, db: Session = Depends(get_db_session)):
                 "targetUrl": r.target_url,
                 "status": r.status,
                 "phase": r.phase,
+                "mode": r.mode,
+                "preset": r.preset,
                 "createdAt": r.created_at.isoformat() if r.created_at else None,
                 "completedAt": r.completed_at.isoformat() if r.completed_at else None,
             }
@@ -471,7 +516,8 @@ def create_run(request: RunRequest, db: Session = Depends(get_db_session)):
         "useOllama": request.useOllama,
         "scenario": request.scenario or "",
         "maxHealAttempts": request.maxHealAttempts,
-        "autoHeal": request.autoHeal
+        "autoHeal": request.autoHeal,
+        "useRecorder": request.useRecorder
     }
     
     # Run in thread to avoid async/sync conflicts
@@ -662,12 +708,151 @@ def get_progress(run_id: str):
 
 # MODIFIED: Update run_pipeline_sync to broadcast progress
 def run_pipeline_sync(run_id: str, config: dict):
-    use_recorder = config.get("useRecorder", False)
     """Sync pipeline function with real-time progress updates"""
     with get_db() as db:
         try:
             url = config["url"]
-            add_log_to_db(db, run_id, f" Starting pipeline for {url}")
+            use_recorder = config.get("useRecorder", False)
+            
+            add_log_to_db(db, run_id, f"🚀 Starting pipeline for {url}")
+            
+            # ============================================================
+            # 🎥 RECORDER MODE - Skip discovery & generation
+            # ============================================================
+            if use_recorder:
+                add_log_to_db(db, run_id, "🎥 Visual Recorder Mode - Manual Test Creation")
+                add_log_to_db(db, run_id, "⏭️ Skipping discovery & AI generation")
+                
+                asyncio.run(progress_tracker.broadcast_progress(
+                    run_id,
+                    progress_tracker.update_phase(
+                        run_id, "starting", "running",
+                        "🎥 Opening browser for recording...", 10
+                    )
+                ))
+                
+                # Import recorder
+                
+                
+                run_dir = get_run_dir(run_id)
+                recorded_dir = run_dir / "recorded"
+                recorded_dir.mkdir(parents=True, exist_ok=True)
+                
+                # Launch codegen - BLOCKS until user closes browser
+                add_log_to_db(db, run_id, "🎬 Launching Playwright Codegen...")
+                recorder_result = launch_codegen_recorder(
+                    run_id=run_id,
+                    url=url,
+                    output_dir=recorded_dir
+                )
+                
+                if not recorder_result.get("ok"):
+                    raise Exception(f"Recording failed: {recorder_result.get('message')}")
+                
+                recorded_file = Path(recorder_result.get("output_file"))
+                add_log_to_db(db, run_id, f"✅ Recording saved: {recorded_file.name}")
+                
+                # Copy recorded test to tests directory
+                tests_dir = run_dir / "generator" / "tests"
+                tests_dir.mkdir(parents=True, exist_ok=True)
+                
+                import shutil
+                target_file = tests_dir / "test_recorded.py"
+                shutil.copy(recorded_file, target_file)
+                
+                add_log_to_db(db, run_id, f"📝 Recorded test saved to: {target_file.name}")
+
+                # Save data to database for UI
+                run = db.query(Run).filter(Run.id == run_id).first()
+                if run:
+                    run.discovery_result = {
+                        "ok": True,
+                        "pages": [{"url": url, "title": "Manual Recording", "selectors": []}],
+                        "stats": {"mode": "recorder"}
+                    }
+                    run.generation_result = {
+                        "ok": True,
+                        "count": 1,
+                        "tests": [{"name": "test_recorded", "type": "recorded"}],
+                        "mode": "recorder"
+                    }
+                    run.phase = "execution"
+                    db.commit()
+                
+                # Update progress - skip to 60% (skip discovery & generation)
+                asyncio.run(progress_tracker.broadcast_progress(
+                    run_id,
+                    progress_tracker.update_phase(
+                        run_id, "generation", "completed",
+                        "Manual test recorded", 60
+                    )
+                ))
+                
+                # Phase 3: Execute ONLY the recorded test
+                add_log_to_db(db, run_id, "🧪 Phase 3: Executing recorded test...")
+                asyncio.run(progress_tracker.broadcast_progress(
+                    run_id,
+                    progress_tracker.update_phase(
+                        run_id, "execution", "running",
+                        "Running recorded test...", 70
+                    )
+                ))
+                
+                preset_config = get_preset_config(config["preset"])
+                
+                run_result = run_playwright_tests(
+                    run_id=run_id,
+                    gen_dir=str(tests_dir),
+                    headed=True,  # Keep visible
+                    timeout_seconds=preset_config["timeout"]
+                )
+                
+                summary = run_result.get("summary", {})
+                passed = int(summary.get("passed", 0))
+                failed = int(summary.get("failed", 0))
+                total = int(summary.get("total", 0))
+                
+                asyncio.run(progress_tracker.broadcast_progress(
+                    run_id,
+                    progress_tracker.update_phase(
+                        run_id, "execution", "completed",
+                        f"{passed}/{total} tests passed", 85
+                    )
+                ))
+                
+                run = db.query(Run).filter(Run.id == run_id).first()
+                if run:
+                    run.execution_result = run_result
+                    run.status = "completed" if passed == total else "failed"
+                    run.phase = "completed"
+                    run.completed_at = datetime.utcnow()
+                    db.commit()
+                
+                if passed == total:
+                    add_log_to_db(db, run_id, f"✅ Recorded test passed! ({passed}/{total})")
+                    asyncio.run(progress_tracker.broadcast_progress(
+                        run_id,
+                        progress_tracker.update_phase(
+                            run_id, "completed", "success",
+                            f"Recorded test passed!", 100
+                        )
+                    ))
+                else:
+                    add_log_to_db(db, run_id, f"⚠️ Recorded test failed ({passed}/{total})")
+                    asyncio.run(progress_tracker.broadcast_progress(
+                        run_id,
+                        progress_tracker.update_phase(
+                            run_id, "completed", "failed",
+                            f"Test failed", 100
+                        )
+                    ))
+                
+                add_log_to_db(db, run_id, "🏁 Pipeline completed")
+                return  # ← EXIT HERE - Skip normal pipeline
+            
+            # ============================================================
+            # If NOT recorder mode, continue with NORMAL pipeline
+            # ============================================================
             
             # Update: Starting
             asyncio.run(progress_tracker.broadcast_progress(
@@ -687,12 +872,12 @@ def run_pipeline_sync(run_id: str, config: dict):
             preset_config = get_preset_config(config["preset"])
             
             # Phase 1: Discovery
-            add_log_to_db(db, run_id, " Phase 1: Discovery...")
+            add_log_to_db(db, run_id, "📡 Phase 1: Discovery...")
             asyncio.run(progress_tracker.broadcast_progress(
                 run_id,
                 progress_tracker.update_phase(
                     run_id, "discovery", "running",
-                    f"Discovering pages on {url}...", 10
+                    f"Discovering pages on {url}...", 10 if not use_recorder else 25
                 )
             ))
             
@@ -711,7 +896,7 @@ def run_pipeline_sync(run_id: str, config: dict):
                 run_id,
                 progress_tracker.update_phase(
                     run_id, "discovery", "completed",
-                    f"Found {len(pages)} pages, {selectors_count} elements", 30
+                    f"Found {len(pages)} pages, {selectors_count} elements", 30 if not use_recorder else 40
                 )
             ))
             
@@ -721,12 +906,12 @@ def run_pipeline_sync(run_id: str, config: dict):
                 db.commit()
             
             # Phase 2: Generation
-            add_log_to_db(db, run_id, " Phase 2: Generating tests...")
+            add_log_to_db(db, run_id, "⚙️ Phase 2: Generating tests...")
             asyncio.run(progress_tracker.broadcast_progress(
                 run_id,
                 progress_tracker.update_phase(
                     run_id, "generation", "running",
-                    "AI is generating test cases...", 40
+                    "AI is generating test cases...", 40 if not use_recorder else 50
                 )
             ))
             
@@ -745,7 +930,13 @@ def run_pipeline_sync(run_id: str, config: dict):
                 raise Exception("Test generation failed")
             
             test_count = gen_result.get("count", 0)
-            add_log_to_db(db, run_id, f"✓ Generated {test_count} test(s)")
+            
+            # If recorder was used, add to count
+            if use_recorder:
+                test_count += 1  # Add the recorded test
+                add_log_to_db(db, run_id, f"✓ Generated {test_count} test(s) (1 recorded + {test_count-1} AI-generated)")
+            else:
+                add_log_to_db(db, run_id, f"✓ Generated {test_count} test(s)")
             
             asyncio.run(progress_tracker.broadcast_progress(
                 run_id,
@@ -761,7 +952,7 @@ def run_pipeline_sync(run_id: str, config: dict):
                 db.commit()
             
             # Phase 3: Execution
-            add_log_to_db(db, run_id, " Phase 3: Executing tests...")
+            add_log_to_db(db, run_id, "🧪 Phase 3: Executing tests...")
             asyncio.run(progress_tracker.broadcast_progress(
                 run_id,
                 progress_tracker.update_phase(
@@ -771,13 +962,17 @@ def run_pipeline_sync(run_id: str, config: dict):
             ))
             
             tests_dir = get_run_dir(run_id) / "generator" / "tests"
-            headed_mode = config.get("mode") == "headed" or use_recorder
-
+            
+            # Use headed mode if recorder was used OR if mode is headed
+            headed_mode = config["mode"] == "headed" or use_recorder
+            
+            if use_recorder:
+                add_log_to_db(db, run_id, "🎥 Running tests in VISIBLE mode (Recorder)")
+            
             run_result = run_playwright_tests(
                 run_id=run_id,
                 gen_dir=str(tests_dir),
-                #headed=config["mode"] == "headed",
-                headed=True,  # ← Use this
+                headed=headed_mode,  # ← MODIFIED
                 timeout_seconds=preset_config["timeout"]
             )
             
@@ -799,7 +994,7 @@ def run_pipeline_sync(run_id: str, config: dict):
                 db.commit()
             
             if failed == 0 and passed > 0:
-                add_log_to_db(db, run_id, f" All tests passed! ({passed}/{total})")
+                add_log_to_db(db, run_id, f"✅ All tests passed! ({passed}/{total})")
                 asyncio.run(progress_tracker.broadcast_progress(
                     run_id,
                     progress_tracker.update_phase(
@@ -815,7 +1010,7 @@ def run_pipeline_sync(run_id: str, config: dict):
                     
             elif failed > 0 and config.get("autoHeal", True):
                 # Phase 4: Healing
-                add_log_to_db(db, run_id, f" Phase 4: Auto-healing ({failed} failures)...")
+                add_log_to_db(db, run_id, f"🔧 Phase 4: Auto-healing ({failed} failures)...")
                 asyncio.run(progress_tracker.broadcast_progress(
                     run_id,
                     progress_tracker.update_phase(
@@ -839,7 +1034,7 @@ def run_pipeline_sync(run_id: str, config: dict):
                     generated_files=[t.get("path", "") for t in gen_result.get("tests", [])],
                     models=models,
                     max_attempts=config["maxHealAttempts"],
-                    headed=config["mode"] == "headed",
+                    headed=headed_mode,  # ← MODIFIED
                     timeout_seconds=preset_config["timeout"]
                 )
                 
@@ -849,7 +1044,7 @@ def run_pipeline_sync(run_id: str, config: dict):
                 
                 if healing_result.get("healed"):
                     attempts = healing_result.get("healing_attempts", 0)
-                    add_log_to_db(db, run_id, f" Healed after {attempts} attempt(s)!")
+                    add_log_to_db(db, run_id, f"✅ Healed after {attempts} attempt(s)!")
                     asyncio.run(progress_tracker.broadcast_progress(
                         run_id,
                         progress_tracker.update_phase(
@@ -862,7 +1057,7 @@ def run_pipeline_sync(run_id: str, config: dict):
                         run.execution_result = healing_result.get("final_result")
                         db.commit()
                 else:
-                    add_log_to_db(db, run_id, " Healing incomplete")
+                    add_log_to_db(db, run_id, "⚠️ Healing incomplete")
                     asyncio.run(progress_tracker.broadcast_progress(
                         run_id,
                         progress_tracker.update_phase(
@@ -890,7 +1085,7 @@ def run_pipeline_sync(run_id: str, config: dict):
                 run.completed_at = datetime.utcnow()
                 db.commit()
             
-            add_log_to_db(db, run_id, " Pipeline completed")
+            add_log_to_db(db, run_id, "🏁 Pipeline completed")
             
         except Exception as e:
             log.exception(f"Pipeline failed for {run_id}: {e}")

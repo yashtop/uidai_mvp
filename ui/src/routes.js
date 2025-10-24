@@ -1,3 +1,4 @@
+// ui/src/routes.js
 import React from 'react';
 import { Icon } from '@chakra-ui/react';
 import {
@@ -7,6 +8,7 @@ import {
   MdCode,
   MdCheckCircle,
   MdAssessment,
+  MdAutoFixHigh,
 } from 'react-icons/md';
 
 // Agentic Views
@@ -16,6 +18,11 @@ import DiscoveryView from "views/agentic/DiscoveryView";
 import TestsView from "views/agentic/TestsView";
 import ResultsView from "views/agentic/ResultsView";
 import ReportView from "views/agentic/ReportView";
+import HealingView from "views/agentic/HealingView"; // NEW
+import FailuresView from "views/agentic/FailuresView"; // NEW
+import RunProgress from "views/agentic/RunProgress";
+
+
 
 const routes = [
   {
@@ -58,11 +65,33 @@ const routes = [
     invisible: true,
   },
   {
+    name: "Healing Report", // NEW
+    layout: "/admin",
+    path: "/healing/:runId",
+    icon: <Icon as={MdAutoFixHigh} width="20px" height="20px" color="inherit" />,
+    component: <HealingView />,
+    invisible: true,
+  },
+  {
     name: "Full Report",
     layout: "/admin",
     path: "/report/:runId",
     icon: <Icon as={MdAssessment} width="20px" height="20px" color="inherit" />,
     component: <ReportView />,
+    invisible: true,
+  },
+  {
+    name: "Failures & Screenshots", // NEW
+    layout: "/admin",
+    path: "/failures/:runId",
+    icon: <Icon as={MdAssessment} width="20px" height="20px" color="inherit" />,
+    component: <FailuresView />,
+    invisible: true,
+  },{
+    name: "Run Progress",
+    layout: "/admin",
+    path: "/progress/:runId",
+    component: <RunProgress />,
     invisible: true,
   },
 ];

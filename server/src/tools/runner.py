@@ -20,7 +20,7 @@ def make_run_dir(run_id: str) -> Path:
     d.mkdir(parents=True, exist_ok=True)
     return d
 
-def run_playwright_tests(run_id: str, gen_dir: str, headed: bool, playwright_options: Dict[str, Any]=None, timeout_seconds: int = 300) -> Dict[str, Any]:
+def run_playwright_tests(run_id: str, gen_dir: str, headed: bool = False, playwright_options: Dict[str, Any]=None, timeout_seconds: int = 300) -> Dict[str, Any]:
     run_dir = make_run_dir(run_id)
     tests_dir = Path(gen_dir)
 
@@ -55,7 +55,10 @@ def run_playwright_tests(run_id: str, gen_dir: str, headed: bool, playwright_opt
         f"--json-report-file={json_report}",
         f"--alluredir={run_dir / 'allure-results'}",
     ]
-
+    # ← ADD THIS BLOCK
+    if headed:
+        cmd.append("--headed")
+        log.info(f"🎥 Running in HEADED mode (browser will be visible)")
     log.info("Running tests: %s", " ".join(cmd))
     log.info(f"Working directory: {run_dir}")
     
