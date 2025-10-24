@@ -4,7 +4,7 @@ UIDAI Testing Automation API - Fixed Async/Sync Issue
 Uses threading instead of asyncio for background tasks
 """
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends,WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Depends,WebSocket, WebSocketDisconnect,Query
 from fastapi.responses import StreamingResponse,FileResponse, JSONResponse
 from pathlib import Path
 import mimetypes
@@ -13,12 +13,18 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Optional, Dict, Any
 from sqlalchemy.orm import Session
+from sqlalchemy import func, desc
+
 import logging
 import uuid
 from pathlib import Path
 from datetime import datetime
 import threading
 import json
+from typing import List, Optional
+from datetime import datetime, timedelta
+
+import statistics
 
 # Enhanced imports
 from src.tools.discovery_enhanced import discover_with_selectors
@@ -1105,6 +1111,354 @@ def run_pipeline_sync(run_id: str, config: dict):
                 run.completed_at = datetime.utcnow()
                 db.commit()
 
+# Add these endpoints to server/src/api/routes.py
+
+
+
+
+
+
+# ============================================================
+# COMPARISON ENDPOINTS
+# ============================================================
+
+@app.get("/api/runs/compare")
+async def compare_runs(
+    run_ids: str = Query(..., description="Comma-separated run IDs")
+):
+    """
+    Compare multiple test runs side-by-side
+    
+    Example: /api/runs/compare?run_ids=abc-123,def-456
+    """
+    run_id_list = [rid.strip() for rid in run_ids.split(",")]
+    
+    if len(run_id_list) < 2:
+        raise HTTPException(400, "Need at least 2 run IDs to compare")
+    
+    if len(run_id_list) > 5:
+        raise HTTPException(400, "Cannot compare more than 5 runs at once")
+    
+    with get_db() as db:
+        runs = []
+        for run_id in run_id_list:
+            run = db.query(Run).filter(Run.id == run_id).first()
+            if not run:
+                raise HTTPException(404, f"Run {run_id} not found")
+            runs.append(run)
+        
+        # Build comparison data
+        comparison = {
+            "runs": [],
+            "summary": {
+                "total_runs": len(runs),
+                "avg_pass_rate": 0,
+                "avg_duration": 0,
+                "common_failures": []
+            }
+        }
+        
+        total_pass_rate = 0
+        total_duration = 0
+        all_failures = {}
+        
+        for run in runs:
+            results = run.execution_result or {}
+            summary = results.get("summary", {})
+            
+            passed = int(summary.get("passed", 0))
+            failed = int(summary.get("failed", 0))
+            total = int(summary.get("total", 0))
+            
+            pass_rate = (passed / total * 100) if total > 0 else 0
+            
+            # Calculate duration
+            duration = 0
+            if run.completed_at and run.created_at:
+                duration = (run.completed_at - run.created_at).total_seconds()
+            
+            total_pass_rate += pass_rate
+            total_duration += duration
+            
+            # Track failures
+            if results.get("tests"):
+                for test in results["tests"]:
+                    if test.get("outcome") == "failed":
+                        test_name = test.get("nodeid", "unknown")
+                        all_failures[test_name] = all_failures.get(test_name, 0) + 1
+            
+            # Build run data
+            run_data = {
+                "run_id": run.id,
+                "target_url": run.target_url,
+                "status": run.status,
+                "created_at": run.created_at.isoformat() if run.created_at else None,
+                "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+                "duration_seconds": duration,
+                "preset": run.preset,
+                "mode": run.mode,
+                "tests": {
+                    "total": total,
+                    "passed": passed,
+                    "failed": failed,
+                    "pass_rate": round(pass_rate, 1)
+                },
+                "discovery": {
+                    "pages": len(run.discovery_result.get("pages", [])) if run.discovery_result else 0
+                },
+                "healing": {
+                    "used": bool(run.healing_result),
+                    "attempts": run.healing_result.get("healing_attempts", 0) if run.healing_result else 0,
+                    "healed": run.healing_result.get("healed", False) if run.healing_result else False
+                }
+            }
+            
+            comparison["runs"].append(run_data)
+        
+        # Calculate summary
+        comparison["summary"]["avg_pass_rate"] = round(total_pass_rate / len(runs), 1)
+        comparison["summary"]["avg_duration"] = round(total_duration / len(runs), 1)
+        
+        # Find common failures (appear in 2+ runs)
+        common_failures = [
+            {"test": test, "occurrences": count}
+            for test, count in all_failures.items()
+            if count >= 2
+        ]
+        comparison["summary"]["common_failures"] = sorted(
+            common_failures, 
+            key=lambda x: x["occurrences"], 
+            reverse=True
+        )[:10]  # Top 10
+        
+        return comparison
+
+
+# ============================================================
+# TRENDS & ANALYTICS ENDPOINTS
+# ============================================================
+
+@app.get("/api/runs/trends")
+async def get_trends(
+    days: int = Query(7, description="Number of days to analyze"),
+    url: Optional[str] = Query(None, description="Filter by target URL")
+):
+    """
+    Get test trends over time
+    
+    Example: /api/runs/trends?days=7&url=https://example.com
+    """
+    with get_db() as db:
+        # Get runs from last N days
+        since = datetime.utcnow() - timedelta(days=days)
+        
+        query = db.query(Run).filter(
+            Run.created_at >= since,
+            Run.status.in_(["completed", "failed"])
+        )
+        
+        if url:
+            query = query.filter(Run.target_url == url)
+        
+        runs = query.order_by(Run.created_at.asc()).all()
+        
+        if not runs:
+            return {
+                "period_days": days,
+                "total_runs": 0,
+                "data_points": [],
+                "summary": {}
+            }
+        
+        # Build timeline data
+        data_points = []
+        all_pass_rates = []
+        all_durations = []
+        total_tests = 0
+        total_passed = 0
+        total_failed = 0
+        
+        for run in runs:
+            results = run.execution_result or {}
+            summary = results.get("summary", {})
+            
+            passed = int(summary.get("passed", 0))
+            failed = int(summary.get("failed", 0))
+            total = int(summary.get("total", 0))
+            
+            pass_rate = (passed / total * 100) if total > 0 else 0
+            all_pass_rates.append(pass_rate)
+            
+            duration = 0
+            if run.completed_at and run.created_at:
+                duration = (run.completed_at - run.created_at).total_seconds()
+                all_durations.append(duration)
+            
+            total_tests += total
+            total_passed += passed
+            total_failed += failed
+            
+            data_points.append({
+                "run_id": run.id,
+                "timestamp": run.created_at.isoformat(),
+                "pass_rate": round(pass_rate, 1),
+                "duration_seconds": round(duration, 1),
+                "tests_total": total,
+                "tests_passed": passed,
+                "tests_failed": failed,
+                "status": run.status,
+                "healing_used": bool(run.healing_result)
+            })
+        
+        # Calculate summary stats
+        summary = {
+            "total_runs": len(runs),
+            "total_tests": total_tests,
+            "total_passed": total_passed,
+            "total_failed": total_failed,
+            "overall_pass_rate": round((total_passed / total_tests * 100) if total_tests > 0 else 0, 1),
+            "avg_pass_rate": round(statistics.mean(all_pass_rates) if all_pass_rates else 0, 1),
+            "median_pass_rate": round(statistics.median(all_pass_rates) if all_pass_rates else 0, 1),
+            "pass_rate_stdev": round(statistics.stdev(all_pass_rates) if len(all_pass_rates) > 1 else 0, 1),
+            "avg_duration": round(statistics.mean(all_durations) if all_durations else 0, 1),
+            "median_duration": round(statistics.median(all_durations) if all_durations else 0, 1),
+            "successful_runs": sum(1 for r in runs if r.status == "completed"),
+            "failed_runs": sum(1 for r in runs if r.status == "failed"),
+            "healing_used_count": sum(1 for r in runs if r.healing_result)
+        }
+        
+        return {
+            "period_days": days,
+            "start_date": runs[0].created_at.isoformat(),
+            "end_date": runs[-1].created_at.isoformat(),
+            "total_runs": len(runs),
+            "data_points": data_points,
+            "summary": summary
+        }
+
+
+@app.get("/api/runs/flaky-tests")
+async def get_flaky_tests(
+    days: int = Query(7, description="Number of days to analyze"),
+    min_runs: int = Query(3, description="Minimum runs to consider")
+):
+    """
+    Detect flaky tests (tests that sometimes pass, sometimes fail)
+    
+    Example: /api/runs/flaky-tests?days=7&min_runs=3
+    """
+    with get_db() as db:
+        since = datetime.utcnow() - timedelta(days=days)
+        
+        runs = db.query(Run).filter(
+            Run.created_at >= since,
+            Run.status.in_(["completed", "failed"])
+        ).all()
+        
+        # Track test outcomes
+        test_outcomes = {}  # {test_name: [pass, fail, pass, ...]}
+        
+        for run in runs:
+            results = run.execution_result or {}
+            tests = results.get("tests", [])
+            
+            for test in tests:
+                test_name = test.get("nodeid", "unknown")
+                outcome = test.get("outcome")
+                
+                if test_name not in test_outcomes:
+                    test_outcomes[test_name] = []
+                
+                test_outcomes[test_name].append(outcome)
+        
+        # Find flaky tests
+        flaky_tests = []
+        
+        for test_name, outcomes in test_outcomes.items():
+            if len(outcomes) < min_runs:
+                continue
+            
+            passed_count = outcomes.count("passed")
+            failed_count = outcomes.count("failed")
+            total = len(outcomes)
+            
+            # Flaky if it has both passes and failures
+            if passed_count > 0 and failed_count > 0:
+                flakiness_score = min(passed_count, failed_count) / total
+                
+                flaky_tests.append({
+                    "test_name": test_name,
+                    "total_runs": total,
+                    "passed": passed_count,
+                    "failed": failed_count,
+                    "pass_rate": round((passed_count / total) * 100, 1),
+                    "flakiness_score": round(flakiness_score, 2),
+                    "outcomes": outcomes
+                })
+        
+        # Sort by flakiness score (higher = more flaky)
+        flaky_tests.sort(key=lambda x: x["flakiness_score"], reverse=True)
+        
+        return {
+            "period_days": days,
+            "total_tests_analyzed": len(test_outcomes),
+            "flaky_tests_found": len(flaky_tests),
+            "tests": flaky_tests
+        }
+
+
+@app.get("/api/runs/stats")
+async def get_overall_stats():
+    """
+    Get overall platform statistics
+    
+    Example: /api/runs/stats
+    """
+    with get_db() as db:
+        total_runs = db.query(func.count(Run.id)).scalar()
+        
+        completed_runs = db.query(func.count(Run.id)).filter(
+            Run.status == "completed"
+        ).scalar()
+        
+        failed_runs = db.query(func.count(Run.id)).filter(
+            Run.status == "failed"
+        ).scalar()
+        
+        # Get all execution results
+        runs_with_results = db.query(Run).filter(
+            Run.execution_result.isnot(None)
+        ).all()
+        
+        total_tests = 0
+        total_passed = 0
+        total_failed = 0
+        
+        for run in runs_with_results:
+            summary = run.execution_result.get("summary", {})
+            total_tests += int(summary.get("total", 0))
+            total_passed += int(summary.get("passed", 0))
+            total_failed += int(summary.get("failed", 0))
+        
+        # Recent activity (last 24 hours)
+        last_24h = datetime.utcnow() - timedelta(hours=24)
+        recent_runs = db.query(func.count(Run.id)).filter(
+            Run.created_at >= last_24h
+        ).scalar()
+        
+        return {
+            "total_runs": total_runs,
+            "completed_runs": completed_runs,
+            "failed_runs": failed_runs,
+            "success_rate": round((completed_runs / total_runs * 100) if total_runs > 0 else 0, 1),
+            "total_tests_executed": total_tests,
+            "total_tests_passed": total_passed,
+            "total_tests_failed": total_failed,
+            "overall_pass_rate": round((total_passed / total_tests * 100) if total_tests > 0 else 0, 1),
+            "recent_activity": {
+                "runs_last_24h": recent_runs
+            }
+        }
 if __name__ == "__main__":
     import uvicorn
     log.info("Starting UIDAI Testing Automation API...")

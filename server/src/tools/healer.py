@@ -110,6 +110,8 @@ Return ONLY the complete fixed Python code, nothing else:"""
                         "suggestions": [{
                             "issue": "Test failure",
                             "fix": code,
+                            "original_code": test_file_content,  
+                            "fixed_code": code,   
                             "priority": "high",
                             "confidence": 0.85
                         }],
@@ -133,6 +135,8 @@ Return ONLY the complete fixed Python code, nothing else:"""
                     "issue": "Timeout or navigation issue",
                     "fix": basic_fix,
                     "priority": "medium",
+                    "original_code": test_file_content,  # ← ADD THIS LINE
+                    "fixed_code": basic_fix, 
                     "confidence": 0.7
                 }],
                 "fromModel": "basic_fixer"

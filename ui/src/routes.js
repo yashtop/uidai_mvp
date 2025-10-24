@@ -8,7 +8,7 @@ import {
   MdCode,
   MdCheckCircle,
   MdAssessment,
-  MdAutoFixHigh,
+  MdDashboard,MdAutoFixHigh,MdCompareArrows
 } from 'react-icons/md';
 
 // Agentic Views
@@ -21,7 +21,8 @@ import ReportView from "views/agentic/ReportView";
 import HealingView from "views/agentic/HealingView"; // NEW
 import FailuresView from "views/agentic/FailuresView"; // NEW
 import RunProgress from "views/agentic/RunProgress";
-
+import ComparisonView from "./views/agentic/ComparisonView";
+import TrendsView from "./views/agentic/TrendsView";
 
 
 const routes = [
@@ -36,7 +37,7 @@ const routes = [
     name: "Dashboard",
     layout: "/admin",
     path: "/runs",
-    icon: <Icon as={MdBarChart} width="20px" height="20px" color="inherit" />,
+    icon: <Icon as={MdDashboard} width="20px" height="20px" color="inherit" />,
     component: <RunsDashboard />,
   },
   // Detail views (hidden from sidebar)
@@ -93,6 +94,22 @@ const routes = [
     path: "/progress/:runId",
     component: <RunProgress />,
     invisible: true,
+  },
+  {
+    name: "Compare Runs",
+    layout: "/admin",
+    path: "/comparison",
+    component: <ComparisonView />,
+    invisible: false,
+     icon: <Icon as={MdCompareArrows} width="20px" height="20px" color="inherit" />,
+  },
+  {
+    name: "Trends & Analytics",
+    layout: "/admin",
+    path: "/trends",
+    component: <TrendsView />,
+    invisible: false,
+     icon: <Icon as={MdAssessment} width="20px" height="20px" color="inherit" />,
   },
 ];
 
