@@ -18,7 +18,7 @@ _MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
 _MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
 # Optional: explicit override; if not set we infer from scheme in endpoint (https -> secure)
 _MINIO_SECURE_ENV = os.getenv("MINIO_SECURE", None)
-MINIO_BUCKET = os.getenv("MINIO_BUCKET", "uidai-artifacts")
+MINIO_BUCKET = os.getenv("MINIO_BUCKET", "uidai-artifacts-extended")
 
 _client: Minio | None = None
 

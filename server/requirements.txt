@@ -16,3 +16,16 @@ asyncpg==0.29.0
 # Enhanced capabilities
 beautifulsoup4==4.12.2
 lxml==4.9.3
+
+# NEW - Retry logic
+tenacity>=8.2.3
+
+# NEW - System monitoring
+psutil>=5.9.0
+
+langgraph>=0.0.20
+langchain>=0.1.0
+langchain-community>=0.0.20
+langchain-core>=0.1.0
+
+webcolors>=1.2.0

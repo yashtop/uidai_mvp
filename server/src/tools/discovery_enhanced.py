@@ -8,75 +8,151 @@ from playwright.sync_api import sync_playwright
 from bs4 import BeautifulSoup
 from typing import List, Dict, Any
 from pathlib import Path
+import asyncio
+from playwright.async_api import async_playwright
 
 log = logging.getLogger(__name__)
 
-def discover_with_selectors(run_id: str, url: str, level: int = 1, max_pages: int = 10) -> Dict[str, Any]:
+async def discover_with_selectors_async(run_id: str, url: str, level: int = 1, max_pages: int = 15):
     """
-    Enhanced discovery that extracts real selectors and visibility info
-    Python 3.13 compatible - uses html.parser instead of lxml
+    Async discovery with Playwright
+    Handles Cloudflare and bot detection
     """
-    log.info(f"[{run_id}] Starting enhanced discovery for {url}")
+    log.info(f"[{run_id}] Starting async discovery for {url}")
     
     discovered_pages = []
-    urls_to_visit = [(url, 0)]  # (url, depth)
-    visited_urls = set()
     
-    with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context(
-            viewport={'width': 1920, 'height': 1080},
-            user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+    async with async_playwright() as p:
+        # Launch browser with anti-detection
+        browser = await p.chromium.launch(
+            headless=True,
+            args=[
+                '--disable-blink-features=AutomationControlled',
+                '--disable-dev-shm-usage',
+                '--no-sandbox'
+            ]
         )
         
-        while urls_to_visit and len(discovered_pages) < max_pages:
-            current_url, depth = urls_to_visit.pop(0)
-            
-            if current_url in visited_urls or depth > level:
-                continue
-            
-            visited_urls.add(current_url)
-            
-            try:
-                log.info(f"[{run_id}] Crawling: {current_url} (depth={depth})")
-                page = context.new_page()
-                page.goto(current_url, wait_until="networkidle", timeout=30000)
-                
-                # Extract page information
-                page_info = extract_page_info(page, current_url, run_id)
-                discovered_pages.append(page_info)
-                
-                # Find links for next level
-                if depth < level:
-                    links = page.query_selector_all("a[href]")
-                    for link in links[:20]:  # Limit to 20 links per page
-                        href = link.get_attribute("href")
-                        if href and href.startswith(('http://', 'https://', '/')):
-                            if href.startswith('/'):
-                                from urllib.parse import urljoin
-                                href = urljoin(url, href)
-                            if href.startswith(url):  # Same domain only
-                                urls_to_visit.append((href, depth + 1))
-                
-                page.close()
-                
-            except Exception as e:
-                log.warning(f"[{run_id}] Failed to crawl {current_url}: {e}")
-                continue
+        # Create context with realistic settings
+        context = await browser.new_context(
+            viewport={'width': 1920, 'height': 1080},
+            user_agent='Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            locale='en-US'
+        )
         
-        browser.close()
-    
-    log.info(f"[{run_id}] Discovery complete: {len(discovered_pages)} pages found")
+        page = await context.new_page()
+        
+        # Add anti-detection script
+        await page.add_init_script("""
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
+            });
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [1, 2, 3, 4, 5]
+            });
+        """)
+        
+        try:
+            log.info(f"[{run_id}] Navigating to {url}")
+            
+            # Navigate with network idle
+            await page.goto(url, wait_until="networkidle", timeout=60000)
+            
+            # Wait for potential Cloudflare check
+            await page.wait_for_timeout(3000)
+            
+            # Get page info
+            title = await page.title()
+            log.info(f"[{run_id}] Page title: {title}")
+            
+            # Check if blocked by Cloudflare
+            if "Just a moment" in title or "Cloudflare" in title:
+                log.warning(f"[{run_id}] Cloudflare detected, waiting longer...")
+                await page.wait_for_timeout(7000)
+                title = await page.title()
+                log.info(f"[{run_id}] After wait, title: {title}")
+            
+            # Extract selectors
+            selectors = await page.evaluate('''() => {
+                const elements = document.querySelectorAll('a, button, input, form, nav');
+                return Array.from(elements).slice(0, 50).map(el => {
+                    // Generate selector
+                    let selector = '';
+                    if (el.id) {
+                        selector = `#${el.id}`;
+                    } else if (el.className) {
+                        const classes = el.className.split(' ').filter(c => c);
+                        if (classes.length > 0) {
+                            selector = `.${classes[0]}`;
+                        }
+                    }
+                    if (!selector) {
+                        selector = el.tagName.toLowerCase();
+                    }
+                    
+                    return {
+                        tag: el.tagName.toLowerCase(),
+                        text: (el.textContent || '').trim().slice(0, 50),
+                        selector: selector,
+                        href: el.href || '',
+                        type: el.type || ''
+                    };
+                }).filter(el => el.text || el.href);
+            }''')
+            
+            log.info(f"[{run_id}] Extracted {len(selectors)} elements")
+            
+            # Extract forms
+            forms = await page.evaluate('''() => {
+                const formElements = document.querySelectorAll('form');
+                return Array.from(formElements).map((form, idx) => ({
+                    id: form.id || `form_${idx}`,
+                    action: form.action || '',
+                    method: form.method || 'get',
+                    fields: Array.from(form.querySelectorAll('input, textarea, select')).map(field => ({
+                        name: field.name || '',
+                        type: field.type || '',
+                        required: field.required
+                    }))
+                }));
+            }''')
+            
+            log.info(f"[{run_id}] Found {len(forms)} forms")
+            
+            discovered_pages.append({
+                'url': url,
+                'title': title,
+                'selectors': selectors,
+                'forms': forms
+            })
+            
+        except Exception as e:
+            log.error(f"[{run_id}] Discovery error: {e}", exc_info=True)
+            # Return minimal data on error
+            discovered_pages.append({
+                'url': url,
+                'title': 'Error loading page',
+                'selectors': [],
+                'forms': [],
+                'error': str(e)
+            })
+        finally:
+            await context.close()
+            await browser.close()
     
     return {
-        "ok": True,
-        "pages": discovered_pages,
-        "metadata": {
-            "total_pages": len(discovered_pages),
-            "urls_visited": list(visited_urls),
-            "parser": "html.parser"  # Note: Using html.parser for Python 3.13
-        }
+        'pages': discovered_pages,
+        'total_pages': len(discovered_pages)
     }
+
+# Keep the old sync function for backward compatibility (but don't use it in async context)
+def discover_with_selectors(run_id: str, url: str, level: int = 1, max_pages: int = 15):
+    """
+    Sync wrapper - ONLY use this outside async context
+    DO NOT use this in LangGraph nodes
+    """
+    import asyncio
+    return asyncio.run(discover_with_selectors_async(run_id, url, level, max_pages))
 
 def extract_page_info(page, url: str, run_id: str) -> Dict[str, Any]:
     """

@@ -19,7 +19,7 @@ def auto_heal_and_rerun(
     models: List[str],
     max_attempts: int = 3,
     headed: bool = False,
-    timeout_seconds: int = 300
+    timeout_seconds: int = 900
 ) -> Dict[str, Any]:
     """
     Auto-healing loop: Get suggestions, apply best fix, re-run, repeat
