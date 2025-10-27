@@ -175,6 +175,7 @@ export default function RunsDashboard() {
                 <Th width="100px">Status</Th>
                  <Th width="100px">Mode</Th>
                  <Th width="100px">Preset</Th>
+                 <Th width="120px">Test Mode</Th>
                 <Th width="100px">Healing</Th> {/* NEW COLUMN */}
                 <Th width="140px">Created</Th>
                 <Th width="320px">Actions</Th>
@@ -184,7 +185,7 @@ export default function RunsDashboard() {
               {runs.map(r => (
                 <Tr key={r.runId} _hover={{ bg: "gray.50" }}>
                   <Td fontFamily="monospace" fontSize="xs" isTruncated title={r.runId}>
-                    {r.runId.slice(-12)}
+                   
                   </Td>
                   <Td maxW="250px" isTruncated title={r.targetUrl}>
                     <Text fontSize="sm">{r.targetUrl}</Text>
@@ -204,6 +205,21 @@ export default function RunsDashboard() {
                       {r.preset}
                     </Badge>
                   </Td>
+                  <Td>
+        <Badge 
+          colorScheme={
+            r.testCreationMode === "ai" ? "purple" :
+            r.testCreationMode === "record" ? "orange" :
+            r.testCreationMode === "hybrid" ? "green" : "gray"
+          }
+          fontSize="xs"
+        >
+          {r.testCreationMode === "ai" && "🤖 AI"}
+          {r.testCreationMode === "record" && "🎬 Record"}
+          {r.testCreationMode === "hybrid" && "🔀 Hybrid"}
+          {!r.testCreationMode && "Legacy"}
+        </Badge>
+      </Td>
                   <Td>{getHealingBadge(r)}</Td> {/* NEW CELL */}
                   <Td fontSize="xs" color="gray.600">
                     {r.createdAt ? new Date(r.createdAt).toLocaleTimeString() : "N/A"}

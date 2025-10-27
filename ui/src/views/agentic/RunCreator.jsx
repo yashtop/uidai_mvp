@@ -1,4 +1,5 @@
-// ui/src/views/agentic/RunCreator.jsx
+// ui/src/views/agentic/RunCreator.jsx - FIXED VERSION
+
 import React, { useState } from "react";
 import {
   Box,
@@ -29,7 +30,13 @@ import {
   HStack,
   VStack,
   Alert,
-  AlertIcon
+  AlertIcon,
+  Tabs,
+  TabList,
+  TabPanels,
+  Tab,
+  TabPanel,
+  Textarea,
 } from "@chakra-ui/react";
 import { 
   MdLink, 
@@ -37,85 +44,41 @@ import {
   MdSmartToy, 
   MdPlayArrow,
   MdCheckCircle,
-  MdSatelliteAlt,
   MdAutoFixHigh,
   MdInfo,
   MdVideocam,
+  MdAutoMode,
+  MdBlurOn,
 } from "react-icons/md";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 
 const API = process.env.REACT_APP_API_BASE || "http://localhost:8000";
 
-const SCENARIO_TEMPLATES = [
-  {
-    id: "uidai-homepage-navigation",
-    name: "1. UIDAI Homepage & Main Navigation",
-    description: "Test UIDAI English homepage structure and primary navigation",
-  },
-  {
-    id: "uidai-my-aadhaar-services",
-    name: "2. My Aadhaar Services Discovery",
-    description: "Test My Aadhaar section and service pages"
-  },
-  {
-    id: "uidai-about-contact",
-    name: "3. About UIDAI & Contact Pages",
-    description: "Test About UIDAI and Contact/Support pages"
-  },
-  {
-    id: "uidai-enrolment-centers",
-    name: "4. Locate Enrolment Centers",
-    description: "Test enrolment center locator functionality"
-  },
-  {
-    id: "uidai-faqs-help",
-    name: "5. FAQs & Help Resources",
-    description: "Test FAQ section and help resources"
-  },
-  {
-    id: "uidai-downloads-resources",
-    name: "6. Downloads & Resources Section",
-    description: "Test downloads, forms, and resource materials"
-  },
-];
-
 export default function RunCreator() {
   const navigate = useNavigate();
   const toast = useToast();
   
-  const [url, setUrl] = useState("https://uidai.gov.in/en/");
+  const [url, setUrl] = useState("https://www.aubank.in/");
   const [mode, setMode] = useState("headless");
   const [preset, setPreset] = useState("quick");
-  const [useOllama, setUseOllama] = useState(true);
-  const [selectedTemplate, setSelectedTemplate] = useState("");
+  
+  // Test Creation Mode (ai/record/hybrid)
+  const [testCreationMode, setTestCreationMode] = useState("ai");
+  const [story, setStory] = useState("Test homepage: verify page loads, check navigation menu, test search functionality");
+  
   const [isSubmitting, setIsSubmitting] = useState(false);
   
-  // NEW: Auto-healing options
+  // Auto-healing options
   const [autoHeal, setAutoHeal] = useState(true);
   const [maxHealAttempts, setMaxHealAttempts] = useState(3);
-  const [useRecorder, setUseRecorder] = useState(false);
 
   const bgCard = useColorModeValue("white", "gray.800");
   const borderColor = useColorModeValue("gray.200", "gray.700");
   const textColor = useColorModeValue("gray.900", "white");
   const textColorSecondary = useColorModeValue("gray.600", "gray.400");
 
-  const loadTemplate = (templateId) => {
-    setSelectedTemplate(templateId);
-    const template = SCENARIO_TEMPLATES.find(t => t.id === templateId);
-    if (template) {
-      toast({
-        title: "Template selected",
-        description: template.name,
-        status: "info",
-        duration: 2000,
-        position: "top",
-      });
-    }
-  };
-
-  /*async function startRun() {
+  async function startRun() {
     if (isSubmitting) return;
     
     if (!/^https?:\/\//.test(url)) {
@@ -128,87 +91,12 @@ export default function RunCreator() {
       });
       return;
     }
-    
-    setIsSubmitting(true);
-    
-    try {
-      const payload = {
-        url,
-        mode,
-        preset,
-        useOllama,
-        runName: `ui-run-${Date.now()}`,
-        autoHeal,
-        maxHealAttempts,
-        ...(selectedTemplate && { scenario: selectedTemplate }),
-      };
-      
-      console.log("Starting run with:", payload);
-      
-      toast({
-        title: " Starting Enhanced Test Run...",
-        description: autoHeal 
-          ? `With auto-healing (up to ${maxHealAttempts} attempts)`
-          : "Auto-healing disabled",
-        status: "info",
-        duration: 3000,
-        position: "top",
-      });
-      
-      const res = await axios.post(`${API}/api/run`, payload, { 
-        timeout: 100000,
-        headers: { 'Content-Type': 'application/json' }
-      });
-      
-      const runId = res.data.runId;
-      
-      toast({
-        title: "✅ Run Started Successfully!",
-        description: `Run ID: ${runId.slice(-12)} • Enhanced features active`,
-        status: "success",
-        duration: 4000,
-        position: "top",
-      });
-      
-      setTimeout(() => {
-        navigate("/admin/runs");
-      }, 1500);
-      
-    } catch (e) {
-      console.error("Start run error:", e);
-      
-      let errorMessage = "Unknown error occurred";
-      if (e.code === 'ECONNABORTED') {
-        errorMessage = "Request timed out. The server might be busy. Please try again.";
-      } else if (e.response?.data?.detail) {
-        errorMessage = e.response.data.detail;
-      } else if (e.response?.data?.error) {
-        errorMessage = e.response.data.error;
-      } else if (e.message) {
-        errorMessage = e.message;
-      }
-      
-      toast({
-        title: "Failed to start run",
-        description: errorMessage,
-        status: "error",
-        duration: 6000,
-        isClosable: true,
-        position: "top",
-      });
-    } finally {
-      setTimeout(() => setIsSubmitting(false), 1000);
-    }
-  }*/
-// In RunCreator.jsx, update the startRun function
 
-async function startRun() {
-    if (isSubmitting) return;
-    
-    if (!/^https?:\/\//.test(url)) {
+    // Validate story for AI mode
+    if (testCreationMode === "ai" && !story.trim()) {
       toast({ 
-        title: "Invalid URL", 
-        description: "URL must start with http:// or https://",
+        title: "Story Required", 
+        description: "Please provide a test story for AI mode",
         status: "error", 
         duration: 3000,
         position: "top",
@@ -221,23 +109,20 @@ async function startRun() {
     try {
       const payload = {
         url,
-        mode: useRecorder ? "headed" : mode,  // Force headed if recorder is on
+        testCreationMode,
+        story: (testCreationMode === "ai" || testCreationMode === "hybrid") ? story : undefined,
+        mode: testCreationMode === "record" ? "headed" : mode,
         preset,
-        useOllama,
         runName: `ui-run-${Date.now()}`,
         autoHeal,
         maxHealAttempts,
-        useRecorder,  // Include recorder option
-        ...(selectedTemplate && { scenario: selectedTemplate }),
       };
       
       console.log("Starting run with:", payload);
       
       toast({
-        title: "🚀 Starting Enhanced Test Run...",
-        description: autoHeal 
-          ? `With auto-healing (up to ${maxHealAttempts} attempts)`
-          : "Auto-healing disabled",
+        title: "🚀 Starting Test Run...",
+        description: getModeDescription(testCreationMode),
         status: "info",
         duration: 3000,
         position: "top",
@@ -245,22 +130,21 @@ async function startRun() {
       
       const res = await axios.post(`${API}/api/run`, payload, { 
         timeout: 100000,
-        headers: { 'Content-Type': 'application/json' }
+        headers: { "Content-Type": "application/json" }
       });
       
+      console.log("Full response:", res.data); // Add this
       const runId = res.data.runId;
-      
-      console.log("✅ Run started successfully:", runId);
+      console.log("Run ID:", runId);
       
       toast({
         title: "✅ Run Started Successfully!",
-        description: `Run ID: ${runId.slice(-12)} • Redirecting to progress...`,
+        description: `Run ID: ${runId.slice(-12)}`,
         status: "success",
         duration: 2000,
         position: "top",
       });
       
-      // ⚠️ CRITICAL: Redirect to progress page instead of dashboard
       setTimeout(() => {
         console.log("Navigating to progress page:", `/admin/progress/${runId}`);
         navigate(`/admin/progress/${runId}`);  // ← CHANGE THIS LINE
@@ -270,12 +154,10 @@ async function startRun() {
       console.error("Start run error:", e);
       
       let errorMessage = "Unknown error occurred";
-      if (e.code === 'ECONNABORTED') {
-        errorMessage = "Request timed out. The server might be busy. Please try again.";
+      if (e.code === "ECONNABORTED") {
+        errorMessage = "Request timed out. The server might be busy.";
       } else if (e.response?.data?.detail) {
         errorMessage = e.response.data.detail;
-      } else if (e.response?.data?.error) {
-        errorMessage = e.response.data.error;
       } else if (e.message) {
         errorMessage = e.message;
       }
@@ -292,10 +174,20 @@ async function startRun() {
       setTimeout(() => setIsSubmitting(false), 1000);
     }
   }
+
+  function getModeDescription(modeType) {
+    switch(modeType) {
+      case "ai": return "AI will generate tests from your story";
+      case "record": return "Browser will open for manual recording";
+      case "hybrid": return "Record workflow + AI generates additional tests";
+      default: return "Starting test run";
+    }
+  }
+
   const presetInfo = {
-    quick: { time: "~2 min", pages: "5 pages", color: "green" },
-    balanced: { time: "~5 min", pages: "15 pages", color: "blue" },
-    deep: { time: "~10 min", pages: "30 pages", color: "purple" },
+    quick: { time: "~2 min", pages: "5 pages" },
+    balanced: { time: "~5 min", pages: "15 pages" },
+    deep: { time: "~10 min", pages: "30 pages" },
   };
 
   return (
@@ -309,10 +201,10 @@ async function startRun() {
             bgClip="text"
             mb="2"
           >
-             Start a Test Run
+            🚀 Start a Test Run
           </Heading>
           <Text color={textColorSecondary} fontSize="md">
-            Enhanced with auto-discovery, AI healing & comprehensive reporting
+            Choose how you want to create tests: AI, Manual Recording, or Hybrid
           </Text>
         </Box>
 
@@ -335,18 +227,154 @@ async function startRun() {
                   <Input
                     value={url}
                     onChange={(e) => setUrl(e.target.value)}
-                    placeholder="https://uidai.gov.in/en/"
+                    placeholder="https://www.aubank.in/"
                     focusBorderColor="purple.500"
                   />
                 </InputGroup>
-                <Text fontSize="xs" color={textColorSecondary} mt="2">
-                   Enhanced discovery will extract real selectors from all pages
-                </Text>
               </Box>
 
               <Divider />
 
-              {/* Settings Grid */}
+              {/* TEST CREATION MODE TABS */}
+              <Box>
+                <FormLabel fontWeight="bold" mb="3" color={textColor}>
+                  <Flex align="center">
+                    <Icon as={MdAutoMode} mr="2" color="blue.500" />
+                    Test Creation Mode
+                  </Flex>
+                </FormLabel>
+
+                <Tabs
+                  variant="enclosed"
+                  colorScheme="purple"
+                  index={["ai", "record", "hybrid"].indexOf(testCreationMode)}
+                  onChange={(index) => {
+                    const modes = ["ai", "record", "hybrid"];
+                    setTestCreationMode(modes[index]);
+                  }}
+                >
+                  <TabList>
+                    <Tab>
+                      <Icon as={MdSmartToy} mr="2" />
+                      AI Mode
+                    </Tab>
+                    <Tab>
+                      <Icon as={MdVideocam} mr="2" />
+                      Record Mode
+                    </Tab>
+                    <Tab>
+                      <Icon as={MdBlurOn} mr="2" />
+                      Hybrid Mode
+                    </Tab>
+                  </TabList>
+
+                  <TabPanels>
+                    {/* AI Mode Panel */}
+                    <TabPanel>
+                      <VStack align="stretch" spacing="4">
+                        <Alert status="info" borderRadius="md">
+                          <AlertIcon />
+                          AI will automatically generate tests from your story
+                        </Alert>
+
+                        <FormLabel fontWeight="semibold" color={textColor}>
+                          Test Story (Required)
+                        </FormLabel>
+                        <Textarea
+                          value={story}
+                          onChange={(e) => setStory(e.target.value)}
+                          placeholder={"Describe what to test. Example:\nTest homepage: verify page loads, check navigation menu, test search functionality"}
+                          rows={6}
+                          focusBorderColor="purple.500"
+                        />
+                        <Text fontSize="xs" color={textColorSecondary}>
+                          💡 Be specific about what you want to test. The AI will generate test scenarios.
+                        </Text>
+                      </VStack>
+                    </TabPanel>
+
+                    {/* Record Mode Panel */}
+                    <TabPanel>
+                      <VStack align="stretch" spacing="4">
+                        <Alert status="warning" borderRadius="md">
+                          <AlertIcon />
+                          Browser will open in headed mode for manual recording
+                        </Alert>
+
+                        <Box p="4" bg="orange.50" rounded="md" border="1px" borderColor="orange.200">
+                          <VStack align="stretch" spacing="2">
+                            <Text fontSize="sm" fontWeight="semibold" color="orange.800">
+                              How it works:
+                            </Text>
+                            <HStack spacing="2" fontSize="sm" color="orange.700">
+                              <Icon as={MdCheckCircle} />
+                              <Text>1. Browser opens with Playwright Inspector</Text>
+                            </HStack>
+                            <HStack spacing="2" fontSize="sm" color="orange.700">
+                              <Icon as={MdCheckCircle} />
+                              <Text>2. Perform actions you want to test</Text>
+                            </HStack>
+                            <HStack spacing="2" fontSize="sm" color="orange.700">
+                              <Icon as={MdCheckCircle} />
+                              <Text>3. Close browser when done</Text>
+                            </HStack>
+                            <HStack spacing="2" fontSize="sm" color="orange.700">
+                              <Icon as={MdCheckCircle} />
+                              <Text>4. Test code generated from your actions</Text>
+                            </HStack>
+                          </VStack>
+                        </Box>
+
+                        <Alert status="info" size="sm" borderRadius="md">
+                          <AlertIcon />
+                          <Text fontSize="xs">
+                            No story needed - your interactions become the test
+                          </Text>
+                        </Alert>
+                      </VStack>
+                    </TabPanel>
+
+                    {/* Hybrid Mode Panel */}
+                    <TabPanel>
+                      <VStack align="stretch" spacing="4">
+                        <Alert status="success" borderRadius="md">
+                          <AlertIcon />
+                          Record workflow, then AI generates additional tests
+                        </Alert>
+
+                        <FormLabel fontWeight="semibold" color={textColor}>
+                          Additional Test Story (Optional)
+                        </FormLabel>
+                        <Textarea
+                          value={story}
+                          onChange={(e) => setStory(e.target.value)}
+                          placeholder={"Optional: Describe additional tests.\nExample: Add edge cases with invalid inputs and error handling"}
+                          rows={5}
+                          focusBorderColor="purple.500"
+                        />
+                        <Text fontSize="xs" color={textColorSecondary}>
+                          💡 First record your workflow, then AI generates additional scenarios
+                        </Text>
+
+                        <Box p="4" bg="green.50" rounded="md" border="1px" borderColor="green.200">
+                          <Text fontSize="sm" fontWeight="semibold" color="green.800" mb="2">
+                            Best of Both Worlds:
+                          </Text>
+                          <VStack align="stretch" spacing="1" fontSize="xs" color="green.700">
+                            <Text>✓ Manual workflow for critical paths</Text>
+                            <Text>✓ AI-generated edge case tests</Text>
+                            <Text>✓ Comprehensive coverage</Text>
+                          </VStack>
+                        </Box>
+                      </VStack>
+                    </TabPanel>
+                  </TabPanels>
+                </Tabs>
+              </Box>
+
+              <Divider />
+
+              {/* Execution Settings */}
               <Stack direction={{ base: "column", md: "row" }} spacing="6">
                 {/* Browser Mode */}
                 <Box flex="1">
@@ -358,10 +386,16 @@ async function startRun() {
                     onChange={(e) => setMode(e.target.value)} 
                     size="lg"
                     focusBorderColor="purple.500"
+                    isDisabled={testCreationMode === "record"}
                   >
-                    <option value="headless"> Headless (Faster)</option>
-                    <option value="headed"> Headed (Visual)</option>
+                    <option value="headless">🚀 Headless (Faster)</option>
+                    <option value="headed">👁️ Headed (Visual)</option>
                   </Select>
+                  {testCreationMode === "record" && (
+                    <Text fontSize="xs" color="orange.600" mt="2">
+                      Record mode uses headed browser
+                    </Text>
+                  )}
                 </Box>
 
                 {/* Test Depth */}
@@ -378,49 +412,14 @@ async function startRun() {
                     size="lg"
                     focusBorderColor="purple.500"
                   >
-                    <option value="quick"> Quick ({presetInfo.quick.time})</option>
-                    <option value="balanced"> Balanced ({presetInfo.balanced.time})</option>
-                    <option value="deep"> Deep ({presetInfo.deep.time})</option>
+                    <option value="quick">⚡ Quick ({presetInfo.quick.time})</option>
+                    <option value="balanced">⚖️ Balanced ({presetInfo.balanced.time})</option>
+                    <option value="deep">🔍 Deep ({presetInfo.deep.time})</option>
                   </Select>
-                  <Text fontSize="xs" color={textColorSecondary} mt="2">
-                    {presetInfo[preset].pages} discovery depth
-                  </Text>
                 </Box>
               </Stack>
 
-              {/* AI Toggle */}
-              <Box
-                p="5"
-                rounded="lg"
-                bg={useOllama ? "green.50" : "gray.50"}
-                border="2px"
-                borderColor={useOllama ? "green.200" : "gray.200"}
-                transition="all 0.3s"
-              >
-                <Flex justify="space-between" align="center">
-                  <Box>
-                    <Flex align="center" mb="1">
-                      <Icon as={MdSmartToy} mr="2" color={useOllama ? "green.500" : "gray.500"} />
-                      <Text fontWeight="bold" fontSize="lg" color={textColor}>
-                        AI Test Generation
-                      </Text>
-                    </Flex>
-                    <Text fontSize="sm" color={textColorSecondary}>
-                      {useOllama 
-                        ? "✓ Using Ollama qwen2.5-coder:14b for intelligent test creation" 
-                        : "Using basic stub tests"}
-                    </Text>
-                  </Box>
-                  <Switch
-                    isChecked={useOllama}
-                    onChange={(e) => setUseOllama(e.target.checked)}
-                    size="lg"
-                    colorScheme="green"
-                  />
-                </Flex>
-              </Box>
-
-              {/* NEW: Auto-Healing Section */}
+              {/* Auto-Healing */}
               <Box
                 p="5"
                 rounded="lg"
@@ -449,8 +448,8 @@ async function startRun() {
                       </Flex>
                       <Text fontSize="sm" color={textColorSecondary}>
                         {autoHeal 
-                          ? "✓ AI will automatically fix failing tests and re-run them" 
-                          : "Disabled - tests will run once without fixes"}
+                          ? "✓ AI will fix failing tests and re-run" 
+                          : "Disabled - tests run once"}
                       </Text>
                     </Box>
                     <Switch
@@ -461,7 +460,6 @@ async function startRun() {
                     />
                   </Flex>
                   
-                  {/* Healing Attempts Slider */}
                   {autoHeal && (
                     <ScaleFade in={autoHeal} initialScale={0.9}>
                       <Box>
@@ -484,163 +482,16 @@ async function startRun() {
                             </NumberInputStepper>
                           </NumberInput>
                           <Text fontSize="sm" color={textColorSecondary}>
-                            AI will attempt up to {maxHealAttempts} fix{maxHealAttempts > 1 ? 'es' : ''} per failed test
+                            Up to {maxHealAttempts} fix{maxHealAttempts > 1 ? "es" : ""} per test
                           </Text>
-                        </HStack>
-                        <HStack mt="2" spacing="2">
-                          {[1, 2, 3, 4, 5].map(num => (
-                            <Badge
-                              key={num}
-                              colorScheme={maxHealAttempts >= num ? "blue" : "gray"}
-                              variant={maxHealAttempts === num ? "solid" : "outline"}
-                              cursor="pointer"
-                              onClick={() => setMaxHealAttempts(num)}
-                              fontSize="xs"
-                              px="2"
-                              py="1"
-                            >
-                              {num}
-                            </Badge>
-                          ))}
                         </HStack>
                       </Box>
                     </ScaleFade>
                   )}
                 </VStack>
               </Box>
-              <Box
-  p="5"
-  rounded="lg"
-  bg={useRecorder ? "purple.50" : "gray.50"}
-  border="2px"
-  borderColor={useRecorder ? "purple.200" : "gray.200"}
-  transition="all 0.3s"
->
-  <Flex justify="space-between" align="center">
-    <Box>
-      <Flex align="center" mb="1">
-        <Icon as={MdVideocam} mr="2" color={useRecorder ? "purple.500" : "gray.500"} />
-        <Text fontWeight="bold" fontSize="lg" color={textColor}>
-          Visual Test Recorder
-        </Text>
-        <Tooltip 
-          label="Record browser interactions to generate tests" 
-          placement="top"
-          hasArrow
-        >
-          <span>
-            <Icon as={MdInfo} ml="2" color="gray.400" boxSize="4" />
-          </span>
-        </Tooltip>
-      </Flex>
-      <Text fontSize="sm" color={textColorSecondary}>
-        {useRecorder 
-          ? "✓ Launch recorder to capture manual interactions" 
-          : "Generate tests from recorded browser actions"}
-      </Text>
-    </Box>
-    <Switch
-      isChecked={useRecorder}
-      onChange={(e) => setUseRecorder(e.target.checked)}
-      size="lg"
-      colorScheme="purple"
-    />
-  </Flex>
-
-  {/* Recorder Details */}
-  {useRecorder && (
-    <ScaleFade in={useRecorder} initialScale={0.9}>
-      <Box mt="4" p="4" bg="purple.100" rounded="md">
-        <VStack align="stretch" spacing="2">
-          <Text fontSize="sm" fontWeight="semibold" color="purple.800">
-            How it works:
-          </Text>
-          <HStack spacing="2" fontSize="sm" color="purple.700">
-            <Icon as={MdCheckCircle} />
-            <Text>Browser opens with recorder overlay</Text>
-          </HStack>
-          <HStack spacing="2" fontSize="sm" color="purple.700">
-            <Icon as={MdCheckCircle} />
-            <Text>Perform actions you want to test</Text>
-          </HStack>
-          <HStack spacing="2" fontSize="sm" color="purple.700">
-            <Icon as={MdCheckCircle} />
-            <Text>Tests generated from your interactions</Text>
-          </HStack>
-          <Alert status="info" size="sm" rounded="md" mt="2">
-            <AlertIcon />
-            <Text fontSize="xs">
-              Recorder will open in "headed" mode automatically
-            </Text>
-          </Alert>
-        </VStack>
-      </Box>
-    </ScaleFade>
-  )}
-</Box>
             </Stack>
-            
           </Box>
-          
-          {/* Scenario Templates Card */}
-          <ScaleFade in={true} initialScale={0.9}>
-            <Box bg={bgCard} p="8" rounded="xl" shadow="lg" border="1px" borderColor={borderColor}>
-              <Heading size="md" mb="2" color={textColor}>
-                 Test Scenario Templates
-              </Heading>
-              <Text color={textColorSecondary} mb="6" fontSize="sm">
-                Select a pre-configured scenario or use auto-discovery
-              </Text>
-
-              <Stack spacing="3">
-                {SCENARIO_TEMPLATES.map((template) => (
-                  <Box
-                    key={template.id}
-                    p="4"
-                    rounded="lg"
-                    border="2px"
-                    borderColor={selectedTemplate === template.id ? "purple.400" : borderColor}
-                    bg={selectedTemplate === template.id ? "purple.50" : bgCard}
-                    cursor="pointer"
-                    onClick={() => loadTemplate(template.id)}
-                    transition="all 0.2s"
-                    _hover={{
-                      borderColor: "purple.300",
-                      transform: "translateY(-2px)",
-                      shadow: "md",
-                    }}
-                  >
-                    <Flex align="center">
-                      <Box flex="1">
-                        <Text fontWeight="semibold" fontSize="md" color={textColor}>
-                          {template.name}
-                        </Text>
-                        <Text fontSize="sm" color={textColorSecondary} mt="1">
-                          {template.description}
-                        </Text>
-                      </Box>
-                      {selectedTemplate === template.id && (
-                        <Icon as={MdCheckCircle} color="purple.500" boxSize="6" />
-                      )}
-                    </Flex>
-                  </Box>
-                ))}
-              </Stack>
-
-              {selectedTemplate && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  colorScheme="red"
-                  onClick={() => setSelectedTemplate("")}
-                  w="full"
-                  mt="4"
-                >
-                  Clear Selection
-                </Button>
-              )}
-            </Box>
-          </ScaleFade>
 
           {/* Launch Button */}
           <Button
@@ -660,38 +511,39 @@ async function startRun() {
             }}
             onClick={startRun}
             isLoading={isSubmitting}
-            loadingText="Launching Enhanced Test..."
+            loadingText="Launching..."
             leftIcon={<Icon as={MdPlayArrow} boxSize="8" />}
             transition="all 0.2s"
           >
-            {selectedTemplate 
-              ? " Start Test with Scenario" 
-              : " Start Auto-Discovery Test"}
+            {testCreationMode === "ai" && "🤖 Start AI Test Generation"}
+            {testCreationMode === "record" && "🎬 Start Recording Session"}
+            {testCreationMode === "hybrid" && "🔀 Start Hybrid Testing"}
           </Button>
 
-          {/* Enhanced Features Info Banner */}
-          <Box
-            p="5"
-            rounded="lg"
-            bg="blue.50"
-            border="1px"
-            borderColor="blue.200"
-          >
+          {/* Info Banner */}
+          <Box p="5" rounded="lg" bg="blue.50" border="1px" borderColor="blue.200">
             <VStack align="stretch" spacing="2">
               <Text fontSize="sm" fontWeight="bold" color="blue.800">
-                ✨ Enhanced Features Active:
+                ✨ Active Features:
               </Text>
               <HStack flexWrap="wrap" spacing="2">
-                <Badge colorScheme="green" fontSize="xs">Enhanced Discovery</Badge>
-                {autoHeal && <Badge colorScheme="blue" fontSize="xs">Auto-Healing ({maxHealAttempts}x)</Badge>}
+                <Badge 
+                  colorScheme={
+                    testCreationMode === "ai" ? "purple" : 
+                    testCreationMode === "record" ? "orange" : "green"
+                  } 
+                  fontSize="xs"
+                >
+                  {testCreationMode.toUpperCase()} Mode
+                </Badge>
+                {autoHeal && (
+                  <Badge colorScheme="blue" fontSize="xs">
+                    Auto-Healing ({maxHealAttempts}x)
+                  </Badge>
+                )}
                 <Badge colorScheme="purple" fontSize="xs">PostgreSQL Storage</Badge>
-                <Badge colorScheme="orange" fontSize="xs">Better Reporting</Badge>
+                <Badge colorScheme="green" fontSize="xs">Real-time Progress</Badge>
               </HStack>
-              <Text fontSize="xs" color="blue.700" mt="1">
-                {selectedTemplate 
-                  ? "Targeted tests with real selectors and automatic failure recovery"
-                  : "Complete site discovery with intelligent selector extraction and self-healing"}
-              </Text>
             </VStack>
           </Box>
         </Stack>
