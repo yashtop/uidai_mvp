@@ -125,6 +125,30 @@ class StateUpdater:
                 log.error(f"[{run_id}] ❌ Failed to commit: {e}")
                 db.rollback()
                 raise
+    # server/src/database/state_updater.py - ADD THIS METHOD
+
+def get_run_state(self, run_id: str) -> dict:
+    """Get current state of a run"""
+    try:
+        with self.db.get_session() as session:
+            run = session.query(TestRun).filter_by(run_id=run_id).first()
+            if not run:
+                return None
+            
+            return {
+                'run_id': run.run_id,
+                'status': run.status,
+                'phase': run.phase,
+                'pages_discovered': run.pages_discovered,
+                'scenarios_count': len(run.scenarios) if run.scenarios else 0,
+                'tests_count': run.tests_total,
+                'tests_passed': run.tests_passed,
+                'tests_total': run.tests_total,
+                'tests_failed': run.tests_failed,
+            }
+    except Exception as e:
+        log.error(f"Error getting run state: {e}")
+        return None
 
 # Global instance
 state_updater = StateUpdater()

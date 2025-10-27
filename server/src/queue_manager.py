@@ -9,7 +9,7 @@ from asyncio import Queue, Semaphore
 from .config import config
 from .database.connection import get_db
 from .database.models import Run
-
+from .pipeline_langgraph import langgraph_pipeline
 log = logging.getLogger(__name__)
 
 class RunQueueManager:
@@ -102,10 +102,28 @@ class RunQueueManager:
         """Execute a single run - FULLY ASYNC"""
         try:
             # Import pipeline
-            from .pipeline_langgraph import langgraph_pipeline
+            
             
             # Run async pipeline directly (no thread pool needed)
             await langgraph_pipeline.run(run_id, run_config)
+            await self._update_progress(run_id, {
+            "phase": "starting",
+            "status": "running",
+            "details": "Initializing browser...",
+            "progress": 5
+            })
+            await self._update_progress(run_id, {
+            "phase": "discovery",
+            "status": "running",
+            "details": "Discovering pages...",
+            "progress": 30
+            })
+            await self._update_progress(run_id, {
+                "phase": "completed",
+                "status": "completed",
+                "details": "All tests completed!",
+                "progress": 100
+            })
             
         except Exception as e:
             log.error(f"Run {run_id} failed: {e}", exc_info=True)
@@ -147,6 +165,23 @@ class RunQueueManager:
                 return True
         
         return False
-
+    async def _update_progress(self, run_id: str, progress_data: dict):
+        """
+        Update progress in database and broadcast to WebSocket
+        """
+        # Update database
+        with get_db() as session:
+            run = session.query(TestRun).filter_by(run_id=run_id).first()
+            if run:
+                run.phase = progress_data.get("phase", run.phase)
+                run.status = progress_data.get("status", run.status)
+                run.details = progress_data.get("details", run.details)
+                run.progress = progress_data.get("progress", run.progress)
+                session.commit()
+        
+        # Broadcast to WebSocket
+        await broadcast_progress(run_id, progress_data)
+        
+        log.info(f"📊 Progress update for {run_id}: {progress_data}")
 # Global queue manager
 queue_manager = RunQueueManager()
