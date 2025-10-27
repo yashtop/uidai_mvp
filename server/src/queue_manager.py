@@ -1,4 +1,4 @@
-# server/src/queue_manager.py - ASYNC VERSION
+# server/src/queue_manager.py - FIXED CIRCULAR IMPORT
 
 import asyncio
 import logging
@@ -8,9 +8,13 @@ from asyncio import Queue, Semaphore
 
 from .config import config
 from .database.connection import get_db
-from .database.models import Run
+from .database.models import TestRun
 from .pipeline_langgraph import langgraph_pipeline
+
 log = logging.getLogger(__name__)
+
+# ❌ REMOVE THIS LINE (causes circular import)
+# from .main import broadcast_progress
 
 class RunQueueManager:
     """Manages concurrent test run execution - ASYNC"""
@@ -30,7 +34,7 @@ class RunQueueManager:
         
         # Update run status
         with get_db() as db:
-            run = db.query(Run).filter(Run.id == run_id).first()
+            run = db.query(TestRun).filter_by(run_id=run_id).first()
             if run:
                 run.status = "queued"
                 run.phase = "queued"
@@ -74,7 +78,7 @@ class RunQueueManager:
                     
                     # Update status
                     with get_db() as db:
-                        run = db.query(Run).filter(Run.id == run_id).first()
+                        run = db.query(TestRun).filter_by(run_id=run_id).first()
                         if run:
                             run.status = "running"
                             run.phase = "starting"
@@ -101,70 +105,59 @@ class RunQueueManager:
     async def _execute_run(self, run_id: str, run_config: dict):
         """Execute a single run - FULLY ASYNC"""
         try:
-            # Import pipeline
+            # Update progress: starting
+            await self._update_progress(run_id, {
+                "phase": "starting",
+                "status": "running",
+                "details": "Initializing browser...",
+                "progress": 5
+            })
             
+            # Run async pipeline
+            result = await langgraph_pipeline.run(run_id, run_config)
             
-            # Run async pipeline directly (no thread pool needed)
-            await langgraph_pipeline.run(run_id, run_config)
-            await self._update_progress(run_id, {
-            "phase": "starting",
-            "status": "running",
-            "details": "Initializing browser...",
-            "progress": 5
-            })
-            await self._update_progress(run_id, {
-            "phase": "discovery",
-            "status": "running",
-            "details": "Discovering pages...",
-            "progress": 30
-            })
-            await self._update_progress(run_id, {
-                "phase": "completed",
-                "status": "completed",
-                "details": "All tests completed!",
-                "progress": 100
-            })
+            # Pipeline handles its own progress updates via state_updater
+            # So we just need to send final WebSocket update
+            
+            if result.get('status') == 'completed':
+                await self._update_progress(run_id, {
+                    "phase": "completed",
+                    "status": "completed",
+                    "details": "All tests completed!",
+                    "progress": 100
+                })
+            elif result.get('status') == 'failed':
+                await self._update_progress(run_id, {
+                    "phase": "failed",
+                    "status": "failed",
+                    "details": result.get('error_message', 'Test run failed'),
+                    "progress": 0
+                })
             
         except Exception as e:
             log.error(f"Run {run_id} failed: {e}", exc_info=True)
             
             # Update status in database
             with get_db() as db:
-                run = db.query(Run).filter(Run.id == run_id).first()
+                run = db.query(TestRun).filter_by(run_id=run_id).first()
                 if run:
                     run.status = "failed"
                     run.error_message = str(e)
                     run.completed_at = datetime.utcnow()
                     db.commit()
+            
+            # Broadcast failure
+            await self._update_progress(run_id, {
+                "phase": "failed",
+                "status": "failed",
+                "details": str(e),
+                "progress": 0
+            })
         
         finally:
             self.active_runs.pop(run_id, None)
             log.info(f"Run {run_id} completed (active={len(self.active_runs)})")
     
-    def get_status(self) -> dict:
-        """Get current queue status"""
-        return {
-            "max_concurrent": self.max_concurrent,
-            "active_runs": len(self.active_runs),
-            "queued_runs": self.queue.qsize(),
-            "is_processing": self.is_processing,
-            "active_run_ids": list(self.active_runs.keys())
-        }
-    
-    async def cancel_run(self, run_id: str) -> bool:
-        """Cancel a queued or running run"""
-        with get_db() as db:
-            run = db.query(Run).filter(Run.id == run_id).first()
-            if run and run.status in ["queued", "running"]:
-                run.status = "cancelled"
-                run.phase = "cancelled"
-                run.completed_at = datetime.utcnow()
-                db.commit()
-                
-                log.info(f"Run {run_id} cancelled")
-                return True
-        
-        return False
     async def _update_progress(self, run_id: str, progress_data: dict):
         """
         Update progress in database and broadcast to WebSocket
@@ -179,9 +172,46 @@ class RunQueueManager:
                 run.progress = progress_data.get("progress", run.progress)
                 session.commit()
         
-        # Broadcast to WebSocket
-        await broadcast_progress(run_id, progress_data)
+        # ✅ FIXED: Import locally to avoid circular import
+        try:
+            # Import here instead of at module level
+            import importlib
+            main_module = importlib.import_module('main')
+            broadcast_progress = getattr(main_module, 'broadcast_progress', None)
+            
+            if broadcast_progress:
+                await broadcast_progress(run_id, progress_data)
+            else:
+                log.warning("broadcast_progress function not found in main module")
+        except Exception as e:
+            log.warning(f"Could not broadcast progress: {e}")
         
         log.info(f"📊 Progress update for {run_id}: {progress_data}")
+    
+    def get_status(self) -> dict:
+        """Get current queue status"""
+        return {
+            "max_concurrent": self.max_concurrent,
+            "active_runs": len(self.active_runs),
+            "queued_runs": self.queue.qsize(),
+            "is_processing": self.is_processing,
+            "active_run_ids": list(self.active_runs.keys())
+        }
+    
+    async def cancel_run(self, run_id: str) -> bool:
+        """Cancel a queued or running run"""
+        with get_db() as db:
+            run = db.query(TestRun).filter_by(run_id=run_id).first()
+            if run and run.status in ["queued", "running"]:
+                run.status = "cancelled"
+                run.phase = "cancelled"
+                run.completed_at = datetime.utcnow()
+                db.commit()
+                
+                log.info(f"Run {run_id} cancelled")
+                return True
+        
+        return False
+
 # Global queue manager
 queue_manager = RunQueueManager()

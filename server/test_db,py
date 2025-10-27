@@ -1,0 +1,11 @@
+# Create a script: recreate_db.py
+from src.database.connection import engine
+from src.database.models import Base
+
+# Drop all tables
+Base.metadata.drop_all(engine)
+
+# Create all tables fresh
+Base.metadata.create_all(engine)
+
+print("✅ Database recreated successfully!")

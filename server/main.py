@@ -11,16 +11,18 @@ from typing import Optional, List
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI, Depends, HTTPException,  WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Depends, HTTPException,  WebSocket, WebSocketDisconnect,BackgroundTasks
 from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
+
 # Database
 from src.database.connection import init_db, get_db, get_db_session
-from src.database.models import Run, RunLog, Artifact,TestRun, TestResult
+from src.database.models import  RunLog, Artifact,TestRun, TestResult
 from src.database.state_updater import state_updater
+
 
 
 # LangGraph Pipeline
@@ -59,7 +61,6 @@ class RunRequest(BaseModel):
     
     maxHealAttempts: int = 3
     autoHeal: bool = True
-    active_connections: dict[str, list[WebSocket]] = {}
 # ============================================================
 # Lifespan Event
 # ============================================================
@@ -134,7 +135,7 @@ def run_pipeline_sync(run_id: str, config_dict: dict):
         
         # Mark as failed in database
         with get_db() as db:
-            run = db.query(Run).filter(Run.id == run_id).first()
+            run = db.query(TestRun).filter(TestRun.id == run_id).first()
             if run:
                 run.status = 'failed'
                 run.error_message = str(e)
@@ -163,7 +164,7 @@ def health_check():
     }
 
 
-from fastapi import BackgroundTasks
+
 
 @app.post("/api/run")
 async def create_run(request: dict, background_tasks: BackgroundTasks):
@@ -313,7 +314,7 @@ async def cancel_run(run_id: str):
 @app.get("/api/runs")
 def get_all_runs(db: Session = Depends(get_db_session)):
     """Get all runs"""
-    runs = db.query(Run).order_by(Run.created_at.desc()).all()
+    runs = db.query(TestRun).order_by(TestRun.created_at.desc()).all()
     
     runs_data = [
         {
@@ -340,7 +341,7 @@ def compare_runs(run_ids: str, db: Session = Depends(get_db_session)):
     if len(run_id_list) < 2:
         raise HTTPException(status_code=400, detail="Please provide at least 2 run IDs to compare")
     
-    runs = db.query(Run).filter(Run.id.in_(run_id_list)).all()
+    runs = db.query(TestRun).filter(Run.id.in_(run_id_list)).all()
     
     if len(runs) != len(run_id_list):
         raise HTTPException(status_code=404, detail="One or more runs not found")
@@ -950,14 +951,12 @@ import json
 # ✅ CORRECT: Use plain Python dict, NOT a Pydantic model
 active_connections: Dict[str, List[WebSocket]] = {}
 
+
+# WebSocket endpoint
 @app.websocket("/ws/run/{run_id}/progress")
 async def websocket_progress(websocket: WebSocket, run_id: str):
-    """
-    WebSocket endpoint for real-time progress updates
-    """
     await websocket.accept()
     
-    # Add to active connections
     if run_id not in active_connections:
         active_connections[run_id] = []
     active_connections[run_id].append(websocket)
@@ -966,17 +965,14 @@ async def websocket_progress(websocket: WebSocket, run_id: str):
     
     try:
         while True:
-            # Wait for messages from client
             data = await websocket.receive_text()
             
             if data == "ping":
-                # Respond with pong
                 await websocket.send_text("pong")
-                log.debug(f"💓 Sent pong to {run_id}")
                 
-                # Also send current progress from database
+                # Send current progress
                 with get_db() as session:
-                    run = session.query(TestRun).filter_by(run_id=run_id).first()
+                    run = session.query(TestRun).filter_by(run_id=run_id).first()  # ✅ Fixed
                     if run:
                         progress_data = {
                             "phase": run.phase or "starting",
@@ -992,12 +988,6 @@ async def websocket_progress(websocket: WebSocket, run_id: str):
             active_connections[run_id].remove(websocket)
             if not active_connections[run_id]:
                 del active_connections[run_id]
-    except Exception as e:
-        log.error(f"WebSocket error for run {run_id}: {e}")
-        if run_id in active_connections and websocket in active_connections[run_id]:
-            active_connections[run_id].remove(websocket)
-
-
 # Helper function to broadcast progress updates
 async def broadcast_progress(run_id: str, progress_data: dict):
     """
